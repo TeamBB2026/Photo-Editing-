@@ -177,7 +177,7 @@ const Pipe = (() => {
     const RW = X1 - X0, RH = Y1 - Y0; if (RW < 16 || RH < 16) return;
     const k = Math.min(1, 1000 / Math.max(RW, RH)), w = Math.max(8, Math.round(RW * k)), h = Math.max(8, Math.round(RH * k)), n = w * h, I = new Float32Array(n);
     for (let y = 0; y < h; y++) { const sy = Math.min(ch - 1, Y0 + (((y + 0.5) * RH / h) | 0)); for (let x = 0; x < w; x++) { const sx = Math.min(cw - 1, X0 + (((x + 0.5) * RW / w) | 0)), p = 4 * (sy * cw + sx); I[y * w + x] = Math.log((0.299 * data[p] + 0.587 * data[p + 1] + 0.114 * data[p + 2]) / 255 + 0.02); } }
-    const sz = Math.max(w, h), lp = LC.blur(I, w, h, Math.max(1, 0.004 * sz)), r = Math.max(3, 0.03 * sz), eps = 0.006, LL = new Float32Array(n); for (let i = 0; i < n; i++) LL[i] = lp[i] * lp[i];
+    const sz = Math.max(w, h), lp = LC.blur(I, w, h, Math.max(1, 0.004 * sz)), r = Math.max(3, 0.03 * sz), eps = 0.012, LL = new Float32Array(n); for (let i = 0; i < n; i++) LL[i] = lp[i] * lp[i];
     const m1 = LC.blur(lp, w, h, r), m2 = LC.blur(LL, w, h, r), A = new Float32Array(n), B = new Float32Array(n);
     for (let i = 0; i < n; i++) { const v = Math.max(0, m2[i] - m1[i] * m1[i]), a = v / (v + eps); A[i] = a; B[i] = m1[i] * (1 - a); }
     const mA = LC.blur(A, w, h, r), mB = LC.blur(B, w, h, r), Dl = new Float32Array(n); for (let i = 0; i < n; i++) Dl[i] = Math.max(-0.35, Math.min(0.35, mA[i] * lp[i] + mB[i] - lp[i]));
@@ -185,7 +185,7 @@ const Pipe = (() => {
       for (let X = X0; X < X1; X++) { const mx = Math.min(mw - 1.001, Math.max(0, (X + 0.5) * mw / cw - 0.5)), mx0 = mx | 0, vx = mx - mx0, mi = my0 * mw + mx0;
         const m = (M[mi] * (1 - vx) + M[mi + 1] * vx) * (1 - vy) + (M[mi + mw] * (1 - vx) + M[mi + mw + 1] * vx) * vy; if (m < 0.03) continue;
         const fx = Math.min(w - 1.001, Math.max(0, (X - X0 + 0.5) * w / RW - 0.5)), fx0 = fx | 0, ux = fx - fx0, fi = fy0 * w + fx0, p = 4 * (Y * cw + X);
-        const d = ((Dl[fi] * (1 - ux) + Dl[fi + 1] * ux) * (1 - uy) + (Dl[fi + w] * (1 - ux) + Dl[fi + w + 1] * ux) * uy) * Math.min(1, m * 1.2) * amt * 0.85, g = Math.exp(d);
+        const d = ((Dl[fi] * (1 - ux) + Dl[fi + 1] * ux) * (1 - uy) + (Dl[fi + w] * (1 - ux) + Dl[fi + w + 1] * ux) * uy) * Math.min(1, m * 1.2) * amt, g = Math.exp(d);
         data[p] = ((data[p] / 255 + 0.02) * g - 0.02) * 255; data[p + 1] = ((data[p + 1] / 255 + 0.02) * g - 0.02) * 255; data[p + 2] = ((data[p + 2] / 255 + 0.02) * g - 0.02) * 255; } }
   }
   /* flyaway hair: thin stray strands just outside the person's outline are replaced by the background behind them.
@@ -380,10 +380,10 @@ const Pipe = (() => {
             // catchlight and iris sparkle: the brightest specks a touch brighter, the iris clearer
             if (ey > 0.02 && L > 0.7) { const k = 1 + 0.18 * ey; r = Math.min(1, r * k); g = Math.min(1, g * k); b = Math.min(1, b * k); }
             else if (ey > 0.02 && L > 0.12 && L < 0.32 && sat > 0.15) { const k = 1 + 0.25 * ey; r = L + (r - L) * k * 1.04; g = L + (g - L) * k * 1.04; b = L + (b - L) * k * 1.04; }
-            if (L > 0.32 && sat < 0.38) { const k = 1 - 0.55 * e, t = Math.min(1, L * (1 + 0.14 * e)); r = t + (r - L) * k; g = t + (g - L) * k; b = t + (b - L) * k; }   // whites of the eyes: cleaner and a little brighter
+            if (L > 0.26 && sat < 0.4) { const k = 1 - 0.7 * e, t = Math.min(1, L * (1 + 0.22 * e)); r = t + (r - L) * k; g = t + (g - L) * k; b = t + (b - L) * k; }   // whites of the eyes: cleaner and a little brighter
             else if (L < 0.3) { const k = 1 - 0.28 * e; r *= k; g *= k; b *= k; } }                                                                        // iris, lashes, liner: a touch deeper, so the eyes read crisp
           if (uM > 0.02) { const u = uM * amt * 0.22 * Math.max(0, 1 - L / 0.75), k = 1 + u; r = Math.min(1, r * k); g = Math.min(1, g * k); b = Math.min(1, b * k); }   // lift shadows under the eyes
-          if (mM > 0.02 && L > 0.38 && sat < 0.42 && r >= b) { const t = mM * Math.min(1, amt + 1.4 * thA) * Math.min(1, (0.42 - sat) / 0.15), L2 = Math.min(1, L * (1 + 0.08 * t)), k = 1 - 0.6 * t; r = L2 + (r - L) * k; g = L2 + (g - L) * k; b = L2 + (b - L) * k; }   // teeth
+          if (mM > 0.02 && L > 0.24 && sat < 0.5 && r >= b) { const t = mM * Math.min(1, amt + 1.4 * thA) * Math.min(1, (0.5 - sat) / 0.15) * Math.min(1, (L - 0.24) / 0.12),   /* teeth are the bright, least coloured part of the mouth, even in dim or warm light */ L2 = Math.min(1, L * (1 + 0.16 * t)), k = 1 - 0.75 * t; r = L2 + (r - L) * k; g = L2 + (g - L) * k; b = L2 + (b - L) * k; }   // teeth
         } }
       data[p] = r * 255; data[p + 1] = g * 255; data[p + 2] = b * 255;
     }
