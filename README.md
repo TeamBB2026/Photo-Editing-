@@ -5,8 +5,9 @@ A browser-based photo editor for wedding portraits, built for Brian's photograph
 - **AI editor**: edits a photo step by step (fix, white balance, colour, skin, light) with Light touch / Balanced / Bold strength.
 - **Skin**: per-person skin handling (deep and light skin kept true), retoucher-style smooth skin that keeps texture, tattoos and sheen.
 - **RAW**: Canon CR3 and other RAW files decoded in the browser with LibRaw (WebAssembly), matched to the camera's own look.
-- **Night rescue**: brings up dark and night photos area by area, keeping lights and highlights.
-- **Retouch**: blemish heal, shine control, skin smoothing that keeps texture, Beautify.
+- **Night rescue**: brings up dark and night photos area by area, keeping lights and highlights; one-click rescue and automatic rescue for very dark photos.
+- **Retouch**: blemish heal, shine control, eyes, teeth, fabric wrinkles, flyaway hair, skin smoothing that keeps texture, Beautify.
+- **Studio light**: direction or a placed spot, warm or cool colour.
 - **Light effects**: soft glow and a placeable sun flare.
 - **Subject only**: edits the people and leaves the background as shot.
 - **Curve**: tone curve with Apply to subject / background / whole photo.
