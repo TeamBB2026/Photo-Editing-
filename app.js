@@ -51,6 +51,7 @@
     let db = null, dl = null, sm = null, as = null;
     try { if (window.claude && claude.use) [db, dl, sm, as] = await Promise.all([claude.use('db'), claude.use('downloads'), claude.use('sample'), claude.use('assets')]); } catch (e) { }
     S.db = db; S.dl = dl; S.sample = sm; S.assets = as;
+    if (db) { try { db.collection('prefs').doc('style').onSnapshot(d => { const v = d && d.exists !== false && d.data ? d.data() : null; if (v && v.n) { S.style = v; lsSet('lookmatch.style', JSON.stringify(v)); } }, () => { }); } catch (e) { } }
     if (db) { try { db.collection('prefs').doc('lessons').onSnapshot(d => { const v = d && d.exists !== false && d.data ? d.data() : null; if (v && v.keys) { S.lessons = v; renderRight(); } }, () => { }); } catch (e) { } }
     if (db) db.collection('looks').onSnapshot(snap => ingestLooks(snap.docs.map(d => Object.assign({ id: d.id }, d.data()))), () => toast('Saved looks could not load.'));
     else ingestLooks(lsLooks());
@@ -732,17 +733,20 @@
     return box;
   }
   /* ================= AI editor: Claude looks at the photo, moves the sliders, looks at the result, and repeats ================= */
-  const AG = { handRetouch: false /* dodge & burn paused: skin smoothing first */, busy: false, msg: null, text: '', refs: [], notMine: true, refLookId: null, building: false };
+  const AG = { approveEach: (() => { try { return localStorage.getItem('lookmatch.approveEach') !== '0'; } catch (e) { return true; } })(), handRetouch: false /* dodge & burn paused: skin smoothing first */, busy: false, msg: null, text: '', refs: [], notMine: true, refLookId: null, building: false };
   const AGENT_KEYS = { temp: [-100, 100], tint: [-100, 100], ev: [-3, 3], subjLight: [0, 200], skinMatch: [0, 100], skinSmooth: [0, 100], beautify: [0, 100], bgEdit: [0, 100],
     contrast: [-100, 100], highlights: [-100, 100], shadows: [-100, 100], whites: [-100, 100], blacks: [-100, 100], vibrance: [-100, 100], saturation: [-100, 100],
     pop: [0, 100], dodgeBurn: [0, 100], clarity: [-100, 100], dehaze: [-100, 100], vignette: [-100, 100], grain: [0, 100], sharpen: [0, 100],
-    bgBlur: [0, 100], bokeh: [0, 100], lookAmt: [0, 150], skyExp: [-100, 100], skySat: [-100, 100], skyTemp: [-100, 100], angle: [-15, 15], faceLight: [0, 100], studioLight: [0, 100], noise: [0, 100], heal: [0, 100], shine: [0, 100], eyes: [0, 100], teeth: [0, 100], fabric: [0, 100], flyaways: [0, 100], studioWarm: [-100, 100], studioX: [0, 1000], studioY: [0, 1000], rescue: [0, 100], glow: [0, 100], flare: [0, 100], flareX: [0, 1000], flareY: [0, 1000], flareWarm: [0, 100] };
+    bgBlur: [0, 100], bokeh: [0, 100], lookAmt: [0, 150], skyExp: [-100, 100], skySat: [-100, 100], skyTemp: [-100, 100], angle: [-15, 15], faceLight: [0, 100], studioLight: [0, 100], noise: [0, 100], heal: [0, 100], shine: [0, 100], faceSlim: [0, 100], jaw: [0, 100], eyesBig: [0, 100], bodySlim: [0, 100], faceRestore: [0, 100], eyes: [0, 100], teeth: [0, 100], fabric: [0, 100], flyaways: [0, 100], studioWarm: [-100, 100], studioX: [0, 1000], studioY: [0, 1000], rescue: [0, 100], glow: [0, 100], flare: [0, 100], flareX: [0, 1000], flareY: [0, 1000], flareWarm: [0, 100] };
   const CAT_KEYS = { studioDir: ['top', 'bottom', 'left', 'right', 'front', 'spot'], studioTarget: ['person', 'background', 'both'] };
   const lsGet = (k, d) => { try { const v = localStorage.getItem(k); return v == null ? d : v; } catch (e) { return d; } };
   const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch (e) { } };
   S.manual = lsGet('lookmatch.manual', '0') === '1'; AG.style = lsGet('lookmatch.agentStyle', '') || null; AG.area = lsGet('lookmatch.area', 'gentle'); AG.strength = lsGet('lookmatch.strength', 'light');
   S.styleNotes = lsGet('lookmatch.styleNotes', 'Make the people pop and stand out: bright, glowing, even skin with its true colour (deep skin rich, never ashy or orange). Clean white dresses and shirts. Vibrant, clear, clean, smooth. Keep background lights golden, never blown to white or gray. No halos or glow around people.');
-  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const sleep0 = ms => new Promise(r => setTimeout(r, ms));
+  // while the AI editor is paused, every one of its waits holds here, so it stops mid-move and carries on from the same spot
+  async function waitPause() { if (!AG.paused) return; holoNote('PAUSED'); while (AG.paused && !(S.busy && S.busy.stop)) await sleep0(200); holoNote(''); }
+  const sleep = async ms => { await sleep0(ms); if (AG.paused) await waitPause(); };
   function holoFace() {
     // the AI's presence: an original instrument-style core (rings, ticks and a voice line), calm and grown-up rather than a cartoon face
     const NS = 'http://www.w3.org/2000/svg', svg = document.createElementNS(NS, 'svg');
@@ -769,6 +773,7 @@
     const h = document.getElementById('agHolo'); if (h) h.dataset.state = AG.state || 'idle';
     const b = document.getElementById('agSay'); if (b && text != null) { b.textContent = text; b.classList.remove('pop'); void b.offsetWidth; b.classList.add('pop'); }
     if (text && state === 'adjust') { AG.now = text.replace(/\. .*$/, ''); hudUpdate(); }
+    if (text) holoLog(text);
     if (text) { AG.log = (AG.log || []).concat(text).slice(-6); const lg = document.getElementById('agLog'); if (lg) { lg.innerHTML = ''; for (const t of AG.log.slice(0, -1)) lg.append(el('li', { text: t })); } }
   }
   /* live status bar while the AI works: which step it is on, what it is moving right now, and buttons to watch the photo or the sliders */
@@ -779,15 +784,17 @@
     if (!h) {
       h = el('div', { id: 'agHud', class: 'ag-hud', role: 'status', 'aria-live': 'polite' },
         el('div', { class: 'hud-top' }, el('span', { class: 'hud-dot', 'aria-hidden': 'true' }), el('b', { id: 'hudStep', text: 'Starting' }), el('span', { class: 'hud-eta', id: 'hudEta' }),
-          el('div', { class: 'hud-btns' }, el('button', { type: 'button', class: 'hud-b', id: 'hudPhoto', onclick: () => { AG.follow = false; hudBtns(); const f = document.getElementById('stage') || document.getElementById('frame'); (f || document.body).scrollIntoView({ block: 'start', behavior: 'smooth' }); } }, 'Watch photo'),
+          el('div', { class: 'hud-btns' }, el('button', { type: 'button', class: 'hud-b hud-pause', id: 'hudPause', onclick: () => { AG.paused = !AG.paused; hudBtns(); setAgent(AG.paused ? 'idle' : 'look', AG.paused ? 'Paused. Press Continue and I pick up right here.' : 'Carrying on.'); } }, 'Pause'),
+            el('button', { type: 'button', class: 'hud-b hud-stop', id: 'hudStopB', onclick: () => { if (S.busy) S.busy.stop = true; AG.paused = false; hudBtns(); setAgent('talk', 'Stopping. Continue edit picks up from here.'); } }, 'Stop'),
+            el('button', { type: 'button', class: 'hud-b', id: 'hudPhoto', onclick: () => { AG.follow = false; hudBtns(); const f = document.getElementById('stage') || document.getElementById('frame'); (f || document.body).scrollIntoView({ block: 'start', behavior: 'smooth' }); } }, 'Watch photo'),
             el('button', { type: 'button', class: 'hud-b', id: 'hudSliders', onclick: () => { AG.follow = true; hudBtns(); const r = document.querySelector('.sl.ai-touch') || document.querySelector('.right .agent'); r && r.scrollIntoView({ block: 'center', behavior: 'smooth' }); } }, 'Watch sliders'))),
         el('ol', { class: 'hud-steps', id: 'hudSteps' }, ...HUD_STEPS.map(([id, n]) => el('li', { 'data-step': id, text: n }))),
-        el('p', { class: 'hud-now', id: 'hudNow', text: '' }));
+        el('p', { class: 'hud-now', id: 'hudNow', text: '' }), el('div', { class: 'hud-approve', id: 'hudApprove', hidden: true }));
       document.body.append(h);
     }
     hudUpdate(); hudBtns();
   }
-  function hudBtns() { const a = document.getElementById('hudPhoto'), b = document.getElementById('hudSliders'); if (a) a.setAttribute('aria-pressed', AG.follow === false ? 'true' : 'false'); if (b) b.setAttribute('aria-pressed', AG.follow === false ? 'false' : 'true'); }
+  function hudBtns() { const pz = document.getElementById('hudPause'); if (pz) { pz.textContent = AG.paused ? 'Continue' : 'Pause'; pz.setAttribute('aria-pressed', AG.paused ? 'true' : 'false'); } document.body.classList.toggle('ai-paused', !!AG.paused); const a = document.getElementById('hudPhoto'), b = document.getElementById('hudSliders'); if (a) a.setAttribute('aria-pressed', AG.follow === false ? 'true' : 'false'); if (b) b.setAttribute('aria-pressed', AG.follow === false ? 'false' : 'true'); }
   function hudUpdate() {
     const h = document.getElementById('agHud'); if (!h) return;
     const cur = AG.stageId, idx = HUD_STEPS.findIndex(x => x[0] === cur);
@@ -797,6 +804,32 @@
     const e = document.getElementById('hudEta'), src = document.getElementById('agEta'); if (e) e.textContent = src ? src.textContent : '';
   }
   function hudStage(id, title) { AG.stageId = id; AG.hudTitle = title || null; hudUpdate(); }
+  /* the editor hands the photo back for approval, the way a hired retoucher would */
+  function askApprove(p, i, n) { return new Promise(res => { const box = document.getElementById('hudApprove'); if (!box) return res('approve');
+    corePhase('done'); holoStage('AWAITING APPROVAL'); hudStage(null, `Photo ${i + 1} of ${n}: ready for review`); setAgent('talk', `Photo ${i + 1} of ${n} is done. Take a look: approve it, or have me redo it.`);
+    const done = v => { box.hidden = true; box.innerHTML = ''; corePhase('work'); res(v); };
+    box.innerHTML = ''; box.append(el('span', { text: `Photo ${i + 1} of ${n} ready for review` }),
+      el('button', { type: 'button', class: 'hud-b hud-ok', onclick: () => done('approve') }, i + 1 < n ? 'Approve & next' : 'Approve'),
+      el('button', { type: 'button', class: 'hud-b', onclick: () => done('redo') }, 'Redo this photo'),
+      el('button', { type: 'button', class: 'hud-b hud-stop', onclick: () => done('stop') }, 'Stop here'));
+    box.hidden = false; const f = document.getElementById('stage') || document.getElementById('frame'); f && f.scrollIntoView({ block: 'start', behavior: 'smooth' }); box.querySelector('.hud-ok').focus({ preventScroll: true }); }); }
+  /* ---------- the holographic layer over the photo while the AI works ---------- */
+  function holoShow(on, p) {
+    let h = document.getElementById('holoLayer'); const fr = document.getElementById('frame');
+    if (!on) { if (h) h.remove(); return; } if (!fr) return;
+    if (!h) { h = el('div', { id: 'holoLayer', class: 'holo-layer', 'aria-hidden': 'true' },
+        el('i', { class: 'hl-corner tl' }), el('i', { class: 'hl-corner tr' }), el('i', { class: 'hl-corner bl' }), el('i', { class: 'hl-corner br' }),
+        el('div', { class: 'hl-grid' }), el('div', { class: 'hl-sweep' }), el('div', { class: 'hl-faces', id: 'hlFaces' }),
+        el('div', { class: 'hl-panel' }, el('div', { class: 'hl-title', id: 'hlStage', text: 'INITIALISING' }), el('ul', { class: 'hl-log', id: 'hlLog' })),
+        el('div', { class: 'hl-note', id: 'hlNote' }), el('div', { class: 'hl-ticks' })); }
+    if (h.parentNode !== fr) fr.append(h);
+    const fc = h.querySelector('#hlFaces'); fc.innerHTML = '';
+    if (p && p.s.people && !p.s.crop && !p.s.rot && !p.s.angle && !p.s.flipH) p.s.people.forEach((q, k) => { if (!q.f) return; const [a, b, c, d] = q.f;
+      fc.append(el('div', { class: 'hl-face', style: `left:${a * 100}%;top:${b * 100}%;width:${(c - a) * 100}%;height:${(d - b) * 100}%;animation-delay:${k * 0.25}s` }, el('span', { text: `SUBJECT ${String(k + 1).padStart(2, '0')}` }))); });
+  }
+  function holoStage(t) { const e = document.getElementById('hlStage'); if (e) e.textContent = String(t || '').toUpperCase(); const h = document.getElementById('holoLayer'); if (h) { h.classList.remove('scan'); void h.offsetWidth; h.classList.add('scan'); } }
+  function holoLog(t) { const ul = document.getElementById('hlLog'); if (!ul) return; const li = el('li', { text: '› ' + String(t).replace(/\. .*$/, '').slice(0, 64) }); ul.prepend(li); while (ul.children.length > 5) ul.lastChild.remove(); }
+  function holoNote(t) { const e = document.getElementById('hlNote'); if (e) { e.textContent = t; e.classList.toggle('on', !!t); } }
   // a person scrolling the page takes over: the AI stops pulling the screen to its sliders until they press "Watch sliders"
   { const off = () => { if (AG.busy && !AG.autoScrolling) { if (AG.follow !== false) { AG.follow = false; hudBtns(); } } };
     window.addEventListener('touchmove', off, { passive: true }); window.addEventListener('wheel', off, { passive: true }); }
@@ -804,11 +837,11 @@
     const h = document.getElementById('agHolo'); if (!h) return; const r = h.getBoundingClientRect(), cx = r.left + r.width / 2, cy = r.top + r.height * 0.5;
     const dx = x - cx, dy = y - cy, d = Math.max(1, Math.hypot(dx, dy)); h.style.setProperty('--lx', (dx / d * 12).toFixed(2) + 'px'); h.style.setProperty('--ly', (dy / d * 12).toFixed(2) + 'px');
   }
-  function ghost() { let g = document.getElementById('agHand'); if (!g) { g = el('div', { id: 'agHand', class: 'ag-hand', 'aria-hidden': 'true' }); document.body.append(g); } return g; }
+  function ghost() { let g = document.getElementById('agHand'); if (!g) { g = el('div', { id: 'agHand', class: 'ag-hand', 'aria-hidden': 'true' }); g.innerHTML = '<svg class="hand-svg" viewBox="0 0 64 64"><path d="M22 34V12a4 4 0 0 1 8 0v16-6a4 4 0 0 1 8 0v6-3a4 4 0 0 1 8 0v4-1a4 4 0 0 1 8 0v14c0 9-6 16-16 16h-4c-6 0-10-3-13-8l-7-12a4 4 0 0 1 7-4z"/></svg><i class="hand-ring"></i><i class="hand-brush"></i>'; document.body.append(g); } return g; }
   async function handTo(x, y, ms) { const g = ghost(); g.classList.add('on'); g.style.transitionDuration = (ms || 450) + 'ms'; g.style.transform = `translate(${x}px, ${y}px)`; lookAt(x, y); await sleep((ms || 450) + 40); }
-  function handOff() { const g = document.getElementById('agHand'); if (g) g.classList.remove('on', 'press'); const h = document.getElementById('agHolo'); if (h) { h.style.setProperty('--lx', '0px'); h.style.setProperty('--ly', '0px'); } }
+  function handOff() { const g = document.getElementById('agHand'); if (g) g.classList.remove('on', 'press', 'brush'); const h = document.getElementById('agHolo'); if (h) { h.style.setProperty('--lx', '0px'); h.style.setProperty('--ly', '0px'); } }
   /* move one slider on screen, the way a person would drag it; the photo re-renders as it moves */
-  const SLIDER_NAMES = { eyes: 'Eyes', teeth: 'Teeth', fabric: 'Fabric wrinkles', flyaways: 'Flyaway hair', studioWarm: 'Light colour', studioX: 'Light across', studioY: 'Light height', heal: 'Blemish heal', shine: 'Shine control', rescue: 'Night rescue', glow: 'Glow', flare: 'Sun flare', flareX: 'Flare across', flareY: 'Flare height', flareWarm: 'Flare warmth', skinSmooth: 'Skin smoothing', ev: 'Exposure', faceLight: 'Face light', studioLight: 'Studio light', noise: 'Noise reduction', temp: 'Temperature', tint: 'Tint', subjLight: 'Subject light', skinMatch: 'Skin match', skinSmooth: 'Skin smoothing', beautify: 'Beautify', bgEdit: 'Background edit', contrast: 'Contrast', highlights: 'Highlights', shadows: 'Shadows', whites: 'Whites', blacks: 'Blacks', vibrance: 'Vibrance', saturation: 'Saturation', pop: 'Pop', dodgeBurn: 'Dodge & burn', clarity: 'Clarity', dehaze: 'Dehaze', vignette: 'Vignette', grain: 'Grain', sharpen: 'Sharpening', bgBlur: 'Background blur', bokeh: 'Bokeh lights', lookAmt: 'Look strength', skyExp: 'Sky brightness', skySat: 'Sky saturation', skyTemp: 'Sky warmth', angle: 'Straighten' };
+  const SLIDER_NAMES = { faceSlim: 'Slim face', jaw: 'Jawline', eyesBig: 'Bigger eyes', bodySlim: 'Slim body', faceRestore: 'Face restore', eyes: 'Eyes', teeth: 'Teeth', fabric: 'Fabric wrinkles', flyaways: 'Flyaway hair', studioWarm: 'Light colour', studioX: 'Light across', studioY: 'Light height', heal: 'Blemish heal', shine: 'Shine control', rescue: 'Night rescue', glow: 'Glow', flare: 'Sun flare', flareX: 'Flare across', flareY: 'Flare height', flareWarm: 'Flare warmth', skinSmooth: 'Skin smoothing', ev: 'Exposure', faceLight: 'Face light', studioLight: 'Studio light', noise: 'Noise reduction', temp: 'Temperature', tint: 'Tint', subjLight: 'Subject light', skinMatch: 'Skin match', skinSmooth: 'Skin smoothing', beautify: 'Beautify', bgEdit: 'Background edit', contrast: 'Contrast', highlights: 'Highlights', shadows: 'Shadows', whites: 'Whites', blacks: 'Blacks', vibrance: 'Vibrance', saturation: 'Saturation', pop: 'Pop', dodgeBurn: 'Dodge & burn', clarity: 'Clarity', dehaze: 'Dehaze', vignette: 'Vignette', grain: 'Grain', sharpen: 'Sharpening', bgBlur: 'Background blur', bokeh: 'Bokeh lights', lookAmt: 'Look strength', skyExp: 'Sky brightness', skySat: 'Sky saturation', skyTemp: 'Sky warmth', angle: 'Straighten' };
   async function dragSlider(p, key, target, opts) {
     opts = opts || {};
     let inp = document.getElementById(opts.id || 'sl-' + key);
@@ -842,7 +875,7 @@
     else if (m === 'gentle') { if ('bgEdit' in o) o.bgEdit = Math.min(30, o.bgEdit); if ('bokeh' in o) o.bokeh = Math.min(15, o.bokeh); if (o.studioTarget === 'background' || o.studioTarget === 'both') o.studioTarget = 'person'; }
     return o; }
   /* how hard the AI may push: Light touch keeps the photo's own light and mostly smooths and evens (like a beauty filter); Balanced; Bold */
-  const STRENGTH = { light: { sharpen: [0, 0], grain: [0, 0], skinSmooth: [55, 85], glow: [0, 20], flare: [0, 25], ev: [-0.5, 0.25], subjLight: [0, 10], pop: [0, 15], dodgeBurn: [0, 0], clarity: [-20, 5], dehaze: [-20, 10], contrast: [-15, 15], highlights: [-30, 20], shadows: [-20, 20], whites: [-20, 15], blacks: [-20, 10], vibrance: [-15, 12], saturation: [-10, 8], vignette: [-15, 10], skinMatch: [0, 35], beautify: [0, 30], faceLight: [0, 15], studioLight: [0, 10], bokeh: [0, 10], bgBlur: [0, 15] },
+  const STRENGTH = { light: { sharpen: [0, 0], grain: [0, 0], skinSmooth: [55, 85], glow: [0, 20], flare: [0, 25], faceSlim: [0, 30], jaw: [0, 30], eyesBig: [0, 25], bodySlim: [0, 30], ev: [-0.5, 0.25], subjLight: [0, 10], pop: [0, 15], dodgeBurn: [0, 0], clarity: [-20, 5], dehaze: [-20, 10], contrast: [-15, 15], highlights: [-30, 20], shadows: [-20, 20], whites: [-20, 15], blacks: [-20, 10], vibrance: [-15, 12], saturation: [-10, 8], vignette: [-15, 10], skinMatch: [0, 35], beautify: [0, 30], faceLight: [0, 15], studioLight: [0, 10], bokeh: [0, 10], bgBlur: [0, 15] },
     balanced: { sharpen: [0, 6], grain: [0, 0], skinSmooth: [45, 85], glow: [0, 35], flare: [0, 45], ev: [-1, 0.8], subjLight: [0, 30], faceLight: [0, 35], studioLight: [0, 25], pop: [0, 55], dodgeBurn: [0, 0], clarity: [-30, 12], dehaze: [-30, 20], contrast: [-30, 25], highlights: [-60, 40], vibrance: [-30, 20], saturation: [-20, 12], vignette: [-30, 15] }, bold: { sharpen: [0, 30], dodgeBurn: [0, 0] } };
   const STRENGTH_TEXT = { light: 'LIGHT TOUCH: work like a high-end beauty filter. Keep the photo\'s own light, brightness and mood. Smooth and even the skin properly (skinSmooth 50-70 and beautify 30-45 for portraits: no grain or rough texture left on skin), no sharpening (0), clean up colour, and only fix what is actually wrong. Do not raise exposure for dim faces: give them a little faceLight and a soft studioLight on the person instead, so only the people brighten.',
     balanced: 'BALANCED: a clear, polished edit, but natural (smooth skin: skinSmooth 45-70; sharpening 0-6): correct light and colour, flatter the people, nothing that looks processed.', bold: 'BOLD: a strong, stylised edit is fine where the style calls for it, but skin must stay true to each person.' };
@@ -885,13 +918,13 @@
       goal: 'Set white balance only, for the SKIN: warm, rich and true to its type (deep skin never gray or ashy). The app cleans whites on the people by itself, so do not cool the photo just to whiten the dress. Keep the warmth of the scene if the references are warm.' },
     { id: 'color', name: 'Colour', keys: ['hsl', 'vibrance', 'saturation', 'lookAmt', 'skinMatch', 'skySat', 'skyTemp'],
       goal: 'Colour only: hue, saturation and luminance of each colour family (colour mixer), overall vibrance and saturation, the look strength, and skin colour (skinMatch). Match the colour palette and saturation of the reference photos. Do not change brightness or white balance here.' },
-    { id: 'skin', name: 'Skin', keys: ['skinSmooth', 'beautify', 'heal', 'shine', 'eyes', 'teeth', 'fabric', 'flyaways', 'blemishes'], skin: true,
-      goal: 'Skin, face and finishing retouch only. eyes (20-50) clears red in the whites and adds sparkle when eyes are visible; teeth (20-50) when teeth show; fabric (30-70) smooths creases in the dress, suit or shirt when they are visibly wrinkled; flyaways (20-50) only for stray hairs sticking out against a plain or soft background, never on curly or textured hair styles. Use heal (40-80 on portraits) to clear small spots, pimples and red marks on faces, and shine (30-60) when foreheads, noses or cheeks look oily or hot. Set beautify for a polished portrait finish (even skin that keeps its pores, clearer eyes, lifted under-eyes, whiter teeth, soft glow): 40-70 for portraits and close-ups, 20-40 for wider shots, less for men who want a rugged look. Use skinSmooth for extra softness only when the skin is rough (natural, never plastic). List blemishes to remove: small spots, pimples or marks on visible skin only. Touch nothing else.' },
+    { id: 'skin', name: 'Skin', keys: ['skinSmooth', 'beautify', 'heal', 'shine', 'eyes', 'teeth', 'fabric', 'flyaways', 'faceRestore', 'faceSlim', 'jaw', 'eyesBig', 'bodySlim', 'blemishes'], skin: true,
+      goal: 'Skin, face and finishing retouch only. faceRestore (30-70) when a face is soft, slightly out of focus or motion-blurred; 0 when faces are already sharp. Shaping (faceSlim, jaw, eyesBig, bodySlim) changes how a person looks: use it ONLY when the photographer asks for it, and then subtly (10-35). eyes (20-50) clears red in the whites and adds sparkle when eyes are visible; teeth (20-50) when teeth show; fabric (30-70) smooths creases in the dress, suit or shirt when they are visibly wrinkled; flyaways (20-50) only for stray hairs sticking out against a plain or soft background, never on curly or textured hair styles. Use heal (40-80 on portraits) to clear small spots, pimples and red marks on faces, and shine (30-60) when foreheads, noses or cheeks look oily or hot. Set beautify for a polished portrait finish (even skin that keeps its pores, clearer eyes, lifted under-eyes, whiter teeth, soft glow): 40-70 for portraits and close-ups, 20-40 for wider shots, less for men who want a rugged look. Use skinSmooth for extra softness only when the skin is rough (natural, never plastic). List blemishes to remove: small spots, pimples or marks on visible skin only. Touch nothing else.' },
     { id: 'light', name: 'Light', keys: ['faceLight', 'studioLight', 'studioDir', 'studioTarget', 'studioWarm', 'studioX', 'studioY', 'subjLight', 'dodgeBurn', 'pop', 'vignette', 'clarity', 'skyExp', 'bgEdit', 'bgBlur', 'bokeh', 'glow', 'flare', 'flareX', 'flareY', 'flareWarm'],
       goal: 'Light and finish (if hand dodge & burn strokes were already painted, keep dodgeBurn at 20 or less). glow is a soft dreamy bloom on bright areas (0-25 for a light, airy or romantic feel; 0 otherwise). flare adds a sun flare: use it ONLY when the photographer asks for it or a golden-hour backlit shot clearly calls for it; put flareX/flareY (0-1000 of width/height) at or just outside the frame where the sun or main light really is, and flareWarm 40-80 for sunset light. FACE LIGHT FIRST: whenever a face is darker than it should be or lit flat (night, indoor, no flash, backlit, shade), use faceLight (usually 10-30) and a soft studioLight (usually 8-20, studioTarget person, from the side the existing light comes from or front) INSTEAD of raising exposure: they only touch the people, so the background and the mood stay as shot. Only leave them at 0 when the faces are already well lit. Then: studioLight (with studioDir top, bottom, left, right or front, and studioTarget person, background or both) to add a natural soft light; add light on the people where needed (subjLight), sculpt with dodgeBurn, make them stand out (pop), vignette and clarity, sky brightness. Use bgEdit 0 only if editing the background hurts it. Use bgBlur or bokeh only if the reference photos have that look or the photographer asked. Match how bright and glowing the people are in the reference photos.' }];
   const KEY_HELP = { ev: 'exposure in stops, whole photo', highlights: 'bright areas', shadows: 'dark areas', whites: 'white point', blacks: 'black point', contrast: 'contrast', dehaze: 'haze', angle: 'straighten in degrees',
     temp: 'white balance blue to yellow', tint: 'white balance green to magenta', vibrance: 'saturation of muted colours', saturation: 'all colours', lookAmt: 'look strength %', skinMatch: 'pull skin colour toward the look', skySat: 'sky saturation', skyTemp: 'sky warmth',
-    skinSmooth: 'even skin tone and texture', beautify: 'portrait finish: even skin with pores kept, clearer eyes, lifted under-eyes, whiter teeth, glow', subjLight: 'extra light on the people only', dodgeBurn: 'sculpt light on the people with a soft vignette', pop: 'depth and colour on the people, background set back', vignette: 'edge darkening (negative darkens)', rescue: 'night rescue: lifts dark areas by area, keeps highlights', eyes: 'clear red eye whites, add sparkle', teeth: 'whiter teeth', fabric: 'smooth dress and suit wrinkles', flyaways: 'remove stray hairs at the outline', studioWarm: 'studio light colour: negative cool, positive warm', studioX: 'spot light position across 0-1000 (studioDir spot)', studioY: 'spot light position down 0-1000 (studioDir spot)', heal: 'remove small spots and red marks on faces', shine: 'tone down oily hot spots on faces', glow: 'soft bloom on bright areas', flare: 'sun flare strength', flareX: 'flare position across, 0-1000', flareY: 'flare position down, 0-1000', flareWarm: 'flare warmth 0-100',
+    skinSmooth: 'even skin tone and texture', beautify: 'portrait finish: even skin with pores kept, clearer eyes, lifted under-eyes, whiter teeth, glow', subjLight: 'extra light on the people only', dodgeBurn: 'sculpt light on the people with a soft vignette', pop: 'depth and colour on the people, background set back', vignette: 'edge darkening (negative darkens)', rescue: 'night rescue: lifts dark areas by area, keeps highlights', eyes: 'clear red eye whites, add sparkle', faceRestore: 'restore focus on soft or slightly blurry faces (eyes, lips, hairline)', faceSlim: 'slim the lower face', jaw: 'tighten the line under the chin', eyesBig: 'open the eyes a little', bodySlim: 'slim waist and arms', teeth: 'whiter teeth', fabric: 'smooth dress and suit wrinkles', flyaways: 'remove stray hairs at the outline', studioWarm: 'studio light colour: negative cool, positive warm', studioX: 'spot light position across 0-1000 (studioDir spot)', studioY: 'spot light position down 0-1000 (studioDir spot)', heal: 'remove small spots and red marks on faces', shine: 'tone down oily hot spots on faces', glow: 'soft bloom on bright areas', flare: 'sun flare strength', flareX: 'flare position across, 0-1000', flareY: 'flare position down, 0-1000', flareWarm: 'flare warmth 0-100',
     clarity: 'midtone contrast', faceLight: 'brighten the faces', studioLight: 'add a big soft light', noise: 'high-ISO noise reduction', studioDir: 'where the studio light comes from: top, bottom, left, right, front, or spot (a light placed at studioX, studioY)', studioTarget: 'what the studio light falls on: person, background, both', skyExp: 'sky brightness', bgEdit: '100 edits everything, 0 only the people', bgBlur: 'blur behind the people', bokeh: 'soft light discs behind the people' };
   function agentPrompt(p, stage, round, nRefs, instruction, target) {
     const L = p.s.look ? lookById(p.s.look) : null, ls = L && L.look.kind === 'ref' ? LC.lookSkin(L.look) : null;
@@ -1014,7 +1047,7 @@ Reply with JSON only: {"fixes": [{"idea": 1, "ok": true, "changes": {}}]}`, [p.e
       AG.ideas = ideas; AG.ideasFor = p.id; setAgent('talk', `Here are ${ideas.length} ideas. Pick one and I will do that edit while you watch.`);
       notifyDone('Your ideas are ready.');
     } catch (e) { AG.msg = ['err', e && e.message || String(e)]; setAgent('idle', AG.msg[1]); }
-    etaStop(); S.busy = null; progress(); AG.busy = false; document.body.classList.remove('ai-busy'); handOff(); hudShow(false); corePhase(AG.msg && AG.msg[0] === 'err' ? null : 'done'); AG.stageId = null; renderRight();
+    etaStop(); S.busy = null; progress(); AG.busy = false; AG.paused = false; document.body.classList.remove('ai-busy'); handOff(); hudShow(false); holoShow(false); if (AG.resume) AG.msg = ['ok', `Stopped. Press Continue edit to pick up where it left off (${AG.resume.ids.length} photo${AG.resume.ids.length > 1 ? 's' : ''} to go).`]; corePhase(AG.msg && AG.msg[0] === 'err' ? null : 'done'); AG.stageId = null; renderRight();
   }
   /* do the chosen idea on screen, then check the result against the idea's preview and keep tweaking until they match */
   async function doIdea(p, idea) {
@@ -1054,8 +1087,8 @@ Current settings: ${JSON.stringify(Object.fromEntries(ALL_KEYS().map(k => [k, p.
     } catch (e) { AG.msg = ['err', e && e.message || String(e)]; }
     etaStop(); S.busy = null; progress(); AG.busy = false; document.body.classList.remove('ai-busy'); handOff(); hudShow(false); corePhase(AG.msg && AG.msg[0] === 'err' ? null : 'done'); AG.stageId = null; setAgent('idle', null); scheduleRender('final'); renderRight(); updateCell(p);
   }
-  async function agentEdit(list, instruction) {
-    list = (list || []).filter(t => t && t.eyeBlob); if (!list.length || !S.sample || AG.busy) return;
+  async function agentEdit(list, instruction, resume) {
+    list = (list || []).filter(t => t && t.eyeBlob); if (!list.length || !S.sample || AG.busy) return; AG.resume = null; AG.paused = false; AG.lastInstr = instruction || '';
     learnSweep(); AG.busy = true; AG.follow = true; AG.now = ''; hudShow(true); corePhase('work'); hudStage(null, 'Finding the people'); for (const t of list || []) if (t) { t.s.editStrength = AG.strength || 'light'; if (AG.handRetouch === false) { t.s.aiStrokes = []; t.s.dodgeBurn = 0; } strengthFix(t.s); } AG.msg = null; (list || []).forEach(t => { if (t) t.restored = false; }); if (AG.area === 'subject') for (const t of list) { t.s.bgEdit = 0; t.s.bgBlur = 0; t.s.bokeh = 0; t.s.subjectOnly = true; } else if ((AG.area || 'gentle') === 'gentle') for (const t of list) areaFix(t.s); document.body.classList.add('ai-busy'); renderRight();
     const many = list.length > 1; S.busy = { text: 'AI editor: finding people', frac: 0 }; progress();
     let done = 0, failed = 0;
@@ -1079,8 +1112,9 @@ Current settings: ${JSON.stringify(Object.fromEntries(ALL_KEYS().map(k => [k, p.
 
       S.busy = { text: `AI editor 0 of ${list.length}`, frac: 0 }; progress();
       etaStart(list.length * (7 * (AG.avgCall || 25) + 40));
-      for (const p of list) {
-        if (S.busy && S.busy.stop) break;
+      for (let pi = 0; pi < list.length; pi++) { const p = list[pi];
+        if (S.busy && S.busy.stop) { AG.resume = { ids: list.slice(pi).map(t => t.id), stage: 0, instruction }; break; }
+        const before = JSON.parse(JSON.stringify(p.s)), startStage = resume && pi === 0 && resume.ids[0] === p.id ? resume.stage || 0 : 0; AG.curIdx = pi; holoShow(true, p);
         if (S.active !== p.id || S.mod !== 'develop') { S.active = p.id; S.sel = new Set([p.id]); S.mod = 'develop'; render(); await sleep(700); }
         // the style to work toward
         if (!target && !S.manual && AG.style && lookById(AG.style) && p.s.look !== AG.style) { setAgent('adjust', `Putting on ${lookById(AG.style).name} as the starting style.`); change(s => { s.look = AG.style; s.pick = 'auto'; }, { all: [p] }); renderLeft(); await sleep(1400); }
@@ -1091,10 +1125,11 @@ Current settings: ${JSON.stringify(Object.fromEntries(ALL_KEYS().map(k => [k, p.
             hudStage(null, 'Setting a starting point'); setAgent('adjust', 'Setting a starting point.'); await moveSettings(p, num, null, ''); change(s => { s.skinDepth = a.skinDepth; s.autoDone = true; }, { all: [p], undo: false }); }
         }
         const orig = p.eyeBlob; let notes = [], refsFor = null, calls = 0;
-        stages: for (const stage of STAGES) {
-          hudStage(stage.id);
+        stages: for (const [si, stage] of STAGES.entries()) {
+          if (si < startStage) continue;
+          AG.curStage = si; hudStage(stage.id); holoStage(stage.name);
           for (let round = 1; round <= 2; round++) {
-            if (S.busy && S.busy.stop) break stages;
+            if (S.busy && S.busy.stop) { AG.resume = { ids: list.slice(pi).map(t => t.id), stage: si, instruction }; break stages; }
             S.busy.text = `AI editor: ${many ? `photo ${done + 1} of ${list.length}, ` : ''}${stage.name.toLowerCase()}`; progress();
             setAgent('look', round === 1 ? `Step ${HUD_STEPS.findIndex(x => x[0] === stage.id) + 1} of ${HUD_STEPS.length}, ${stage.name.toLowerCase()}: comparing with the ${target ? 'reference photos' : 'style'}.` : `Checking ${stage.name.toLowerCase()} again.`);
             const L = p.s.look ? lookById(p.s.look) : null, refs = target ? target : L ? (refsFor && refsFor.id === L.id ? refsFor.imgs : (refsFor = { id: L.id, imgs: await refImages(L, p) }).imgs) : [];
@@ -1116,7 +1151,7 @@ Current settings: ${JSON.stringify(Object.fromEntries(ALL_KEYS().map(k => [k, p.
               if (p.id === S.active) { const why = typeof out.note === 'string' ? out.note.trim().slice(0, 140) : ''; setAgent('talk', why || 'Adjusting.'); await sleep(900); await moveSettings(p, tgt, Object.keys(hv).length ? hv : null, ''); }
               else change(s => { Object.assign(s, tgt); for (const b in hv) s.hsl[b] = hv[b]; }, { all: [p] });
               if (blem.length) { S.showRm = true; setAgent('adjust', `Healing ${blem.length} small spot${blem.length > 1 ? 's' : ''} on the skin.`);
-                for (const b of blem) { const fr = document.getElementById('frame'); if (fr) { const r = fr.getBoundingClientRect(); await handTo(r.left + (b[0] + b[2]) / 2 * r.width, r.top + (b[1] + b[3]) / 2 * r.height, 500); ghost().classList.add('press'); }
+                for (const b of blem) { const fr = document.getElementById('frame'); if (fr) { const r = fr.getBoundingClientRect(); ghost().classList.add('brush'); await handTo(r.left + (b[0] + b[2]) / 2 * r.width, r.top + (b[1] + b[3]) / 2 * r.height, 500); ghost().classList.add('press'); }
                   change(s => { s.removals = (s.removals || []).concat([{ label: 'Blemish', kind: 'blemish', box: [b[0], b[1], Math.max(0.004, b[2] - b[0]), Math.max(0.004, b[3] - b[1])], on: true }]); }, { all: [p] }); await sleep(450); ghost().classList.remove('press'); }
                 S.showRm = false; drawOverlay(); }
               handOff();
@@ -1138,6 +1173,11 @@ Current settings: ${JSON.stringify(Object.fromEntries(ALL_KEYS().map(k => [k, p.
         setAgent('talk', S.busy && S.busy.stop ? 'Stopped.' : 'Done with this photo.'); handOff(); etaSet(Math.max(0, (list.length - done - 1)) * (7 * (AG.avgCall || 25) + 40));
         p.agentNote = notes.length ? notes.join(' ') : 'No changes needed.'; p.aiSnap = aiSnapOf(p); persist(p); if (p.id !== S.active) queueThumb(p); updateCell(p);
         done++; S.busy.frac = done / list.length; progress();
+        // like a hired editor: show the finished photo and wait for the photographer before moving on
+        if (!(S.busy && S.busy.stop) && AG.approveEach) { const v = await askApprove(p, pi, list.length);
+          if (v === 'redo') { change(s => { Object.assign(s, before); }, { all: [p] }); done--; pi--; continue; }
+          if (v === 'stop') { AG.resume = pi + 1 < list.length ? { ids: list.slice(pi + 1).map(t => t.id), stage: 0, instruction } : null; S.busy.stop = true; break; }
+          p.pick = 1; p.approved = true; persist(p); updateCell(p); }
       }
       AG.msg = ['ok', failed ? `Edited ${done - failed} of ${list.length}. ${failed} could not be read; try them again.` : `Edited ${done} photo${done === 1 ? '' : 's'}. Ctrl/⌘Z undoes each step.`];
     } catch (e) { AG.msg = ['err', e.message || String(e)]; }
@@ -1240,6 +1280,50 @@ Reply with JSON only: {"done": true or false, "note": "one sentence", "change": 
      Those corrections are averaged across photos and every later edit starts from them. ---- */
   const LEARN_KEYS = () => Object.keys(AGENT_KEYS).filter(k => k !== 'angle');
   S.lessons = (() => { try { return JSON.parse(lsGet('lookmatch.lessons', '') || 'null'); } catch (e) { return null; } })() || { keys: {}, photos: 0 };
+  /* ---------- learning his style from his own finished edits (camera original + his edit, matched by file name) ---------- */
+  S.style = (() => { try { return JSON.parse(lsGet('lookmatch.style', '') || 'null'); } catch (e) { return null; } })();
+  function saveStyle() { lsSet('lookmatch.style', JSON.stringify(S.style)); if (S.db) try { S.db.collection('prefs').doc('style').set(S.style || {}); } catch (e) { } }
+  function statsOf(bmp) {
+    const c = scaled(bmp, bmp.width, bmp.height, 320), d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; c.width = c.height = 0;
+    const Ls = [], C = [], nb = [], na = [], skD = [], skL = [], t = [0, 0, 0];
+    for (let i = 0; i < d.length; i += 8) { LC.rgb2lab(d[i] / 255, d[i + 1] / 255, d[i + 2] / 255, t); const L = t[0], a = t[1], b = t[2], ch = Math.hypot(a, b), hu = Math.atan2(b, a) * 57.3;
+      Ls.push(L); C.push(ch); if (ch < 12 && L > 25 && L < 90) { na.push(a); nb.push(b); }
+      if (ch > 7 && ch < 45 && hu > 18 && hu < 75 && L > 12 && L < 85) (L < 45 ? skD : skL).push([L, a, b]); }
+    const q = (A, f) => { if (!A.length) return null; const B = A.slice().sort((x, y) => x - y); return B[Math.min(B.length - 1, (B.length * f) | 0)]; };
+    const med3 = A => A.length > 40 ? [0, 1, 2].map(k => q(A.map(v => v[k]), 0.5)) : null;
+    return { L50: q(Ls, 0.5), L05: q(Ls, 0.05), L95: q(Ls, 0.95), C50: q(C, 0.5), C80: q(C, 0.8), na: q(na, 0.5), nb: q(nb, 0.5), skD: med3(skD), skL: med3(skL) };
+  }
+  async function teachStyle(files) {
+    const base = f => f.name.replace(/\.[^.]+$/, '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const raw = /\.(cr2|cr3|nef|arw|raf|dng|orf|rw2|pef|srw)$/i, byKey = {};
+    for (const f of files) { const k = base(f); (byKey[k] = byKey[k] || []).push(f); }
+    // an edit is matched to its original by name: the original is the RAW (or the file whose name is contained in the edit's name)
+    const keys = Object.keys(byKey), pairs = [];
+    for (const k of keys) { const g = byKey[k]; if (g.length >= 2) { const o = g.find(f => raw.test(f.name)) || g[0], e = g.find(f => f !== o && !raw.test(f.name)); if (e) pairs.push([o, e]); } }
+    for (const f of files) { if (raw.test(f.name)) continue; const k = base(f); if (byKey[k].length >= 2) continue; const ok = keys.find(o => o !== k && o.length >= 5 && k.includes(o) && byKey[o].length === 1); if (ok) pairs.push([byKey[ok][0], f]); }
+    if (!pairs.length) { toast('No pairs found. Add each camera original with your finished edit of it, named the same (e.g. IMG_1234.CR3 and IMG_1234.jpg).', 7000); return; }
+    S.busy = { text: `Learning your style from ${pairs.length} edit${pairs.length > 1 ? 's' : ''}`, stop: false }; progress();
+    const rows = []; let i = 0;
+    for (const [o, e] of pairs) { if (S.busy.stop) break; i++; S.busy.text = `Learning your style: ${i} of ${pairs.length}`; progress();
+      try { const bo = await decode(o), be = await createImageBitmap(e); const so = statsOf(bo), se = statsOf(be); rows.push({ o: so, e: se }); } catch (err) { console.warn('style pair', o.name, err); } }
+    S.busy = null; progress();
+    if (!rows.length) { toast('Could not read those files.'); return; }
+    const avg = f => { const v = rows.map(f).filter(x => x != null && isFinite(x)); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
+    const sk = (k, j) => avg(r => r.e[k] ? r.e[k][j] : null), skO = (k, j) => avg(r => r.o[k] && r.e[k] ? r.e[k][j] - r.o[k][j] : null);
+    S.style = { n: rows.length, at: Date.now(),
+      mid: avg(r => r.e.L50 - r.o.L50), blacks: avg(r => r.e.L05 - r.o.L05), whites: avg(r => r.e.L95 - r.o.L95), range: avg(r => (r.e.L95 - r.e.L05) - (r.o.L95 - r.o.L05)),
+      rich: avg(r => r.o.C50 > 1 ? r.e.C50 / r.o.C50 : null), warm: avg(r => r.e.nb != null && r.o.nb != null ? r.e.nb - r.o.nb : null), tint: avg(r => r.e.na != null && r.o.na != null ? r.e.na - r.o.na : null),
+      editL50: avg(r => r.e.L50), neutralB: avg(r => r.e.nb), deep: [sk('skD', 0), sk('skD', 1), sk('skD', 2)], light: [sk('skL', 0), sk('skL', 1), sk('skL', 2)], deepD: [skO('skD', 0), skO('skD', 1), skO('skD', 2)], lightD: [skO('skL', 0), skO('skL', 1), skO('skL', 2)] };
+    saveStyle(); renderRight(); toast(`Learned your style from ${rows.length} of your edits.`, 5000);
+  }
+  function styleLines() { const t = S.style; if (!t || !t.n) return []; const f = (v, d = 1) => v == null ? '?' : (v > 0 ? '+' : '') + v.toFixed(d), o = [];
+    o.push(`Midtones ${f(t.mid)} L, blacks ${f(t.blacks)}, whites ${f(t.whites)} (tonal range ${f(t.range)})`);
+    if (t.rich != null) o.push(`Colour richness ×${t.rich.toFixed(2)}`);
+    if (t.warm != null) o.push(`Neutrals ${t.warm > 0.5 ? 'warmer' : t.warm < -0.5 ? 'cooler' : 'about the same'} (${f(t.warm)} b), tint ${f(t.tint)} a`);
+    if (t.deep && t.deep[0] != null) o.push(`Deep skin in your edits: L ${t.deep[0].toFixed(0)}, a ${t.deep[1].toFixed(0)}, b ${t.deep[2].toFixed(0)}${t.deepD[0] != null ? ` (${f(t.deepD[0])} L from camera)` : ''}`);
+    if (t.light && t.light[0] != null) o.push(`Light skin in your edits: L ${t.light[0].toFixed(0)}, a ${t.light[1].toFixed(0)}, b ${t.light[2].toFixed(0)}${t.lightD[0] != null ? ` (${f(t.lightD[0])} L from camera)` : ''}`);
+    return o; }
+  function stylePrompt() { const l = styleLines(); return l.length ? `\nMEASURED FROM ${S.style.n} OF THIS PHOTOGRAPHER'S OWN FINISHED EDITS (his edit vs his camera original, in Lab). Make this photo move the same way, by about these amounts:\n- ${l.join('\n- ')}` : ''; }
   function aiSnapOf(p) { const o = {}; for (const k of LEARN_KEYS()) o[k] = p.s[k] ?? 0; o.hsl = clone(p.s.hsl); o.look = p.s.look || null; return o; }
   function saveLessons() { lsSet('lookmatch.lessons', JSON.stringify(S.lessons)); if (S.db) try { S.db.collection('prefs').doc('lessons').set(S.lessons); } catch (e) { } }
   function learnFrom(p) {
@@ -1255,7 +1339,8 @@ Reply with JSON only: {"done": true or false, "note": "one sentence", "change": 
       const [nm, unit] = k.startsWith('hsl.') ? (() => { const [, b, t] = k.split('.'); return [`${b[0].toUpperCase() + b.slice(1)} ${['hue', 'saturation', 'brightness'][+t]}`, '']; })() : [SLIDER_NAMES[k] || k, ''];
       out.push({ k, nm, avg, txt: `${nm} ${avg > 0 ? 'higher' : 'lower'} by about ${k === 'ev' ? Math.abs(avg).toFixed(2) + ' stops' : Math.round(Math.abs(avg))}` }); }
     return out.sort((x, y) => Math.abs(y.avg) - Math.abs(x.avg)).slice(0, 10); }
-  function lessonsPrompt() { const l = lessonsList(); if (!l.length) return ''; return `\nLEARNED FROM THIS PHOTOGRAPHER'S OWN CORRECTIONS (after earlier AI edits, they moved these sliders by hand on ${Math.max(1, S.lessons.photos || 0)} photo(s) so far). Lean your values this way: ${l.map(x => x.txt).join('; ')}.`; }
+  function lessonsPrompt() { return lessonsPrompt0() + stylePrompt(); }
+  function lessonsPrompt0() { const l = lessonsList(); if (!l.length) return ''; return `\nLEARNED FROM THIS PHOTOGRAPHER'S OWN CORRECTIONS (after earlier AI edits, they moved these sliders by hand on ${Math.max(1, S.lessons.photos || 0)} photo(s) so far). Lean your values this way: ${l.map(x => x.txt).join('; ')}.`; }
   // when they leave a photo the AI edited, or start a new AI edit, see what they changed
   function learnSweep() { let n = 0; for (const q of S.photos || []) if (q.aiSnap && learnFrom(q)) n++; if (n) toast(`Learned from your changes on ${n} photo${n > 1 ? 's' : ''}.`); }
   function agentPanel(p) {
@@ -1303,7 +1388,9 @@ Reply with JSON only: {"done": true or false, "note": "one sentence", "change": 
       el('button', { class: 'btn sm primary', type: 'button', disabled: !real || !S.sample || AG.busy || null, onclick: () => makeIdeas(p, AG.text.trim()) }, AG.busy ? 'Working…' : 'Show me ideas'),
       el('button', { class: 'btn sm', type: 'button', disabled: !real || !S.sample || AG.busy || null, onclick: () => { askNotify(); agentEdit([p], AG.text.trim()); } }, AG.busy ? 'Editing…' : AG.refs.length ? 'Match this photo' : 'Edit this photo'),
       el('button', { class: 'btn sm', type: 'button', title: 'The AI dodges and burns each face and body by hand, then checks and fixes its own strokes', disabled: !real || !S.sample || AG.busy || null, onclick: () => { askNotify(); retouchOnly(p); } }, 'Retouch by hand'),
-      multi ? el('button', { class: 'btn sm', type: 'button', disabled: !S.sample || AG.busy || null, onclick: () => agentEdit(multi, AG.text.trim()) }, AG.refs.length ? `Match ${multi.length} selected` : `Edit ${multi.length} selected`) : null));
+      multi ? el('button', { class: 'btn sm', type: 'button', disabled: !S.sample || AG.busy || null, onclick: () => agentEdit(multi, AG.text.trim()) }, AG.refs.length ? `Match ${multi.length} selected` : `Edit ${multi.length} selected`) : null,
+      AG.resume && !AG.busy ? el('button', { class: 'btn sm primary', type: 'button', disabled: !S.sample || null, onclick: () => { const r = AG.resume, l = r.ids.map(id => photo(id)).filter(Boolean); if (l.length) agentEdit(l, r.instruction || AG.lastInstr || '', r); } }, `Continue edit (${AG.resume.ids.length} to go)`) : null),
+      el('label', { class: 'row', style: 'gap:8px;font-size:12px;margin-top:6px' }, el('input', { type: 'checkbox', checked: AG.approveEach || null, onchange: e => { AG.approveEach = e.target.checked; lsSet('lookmatch.approveEach', AG.approveEach ? '1' : '0'); } }), el('span', { text: 'Wait for my approval after each photo' })));
     if (!S.sample) box.append(el('p', { class: 'note', text: 'The AI editor needs Claude, available when this app is opened in Claude.' }));
     else if (!AG.refs.length && !p.s.look && !(AG.style && !S.manual)) box.append(el('p', { class: 'note', text: S.manual ? 'Turn on a look or drop reference photos so it has a style to match.' : 'Pick a style above or drop reference photos so it has something to match.' }));
     if (AG.msg) box.append(el('div', { class: 'msg ' + (AG.msg[0] === 'err' ? 'warn' : ''), text: AG.msg[1] }));
@@ -1323,6 +1410,11 @@ Reply with JSON only: {"done": true or false, "note": "one sentence", "change": 
       ll.length ? el('div', { class: 'row', style: 'gap:8px' }, el('button', { class: 'btn sm', type: 'button', onclick: () => { if (real) learnFrom(p); renderRight(); } }, 'Learn from this photo now'),
         el('button', { class: 'btn sm', type: 'button', onclick: () => { S.lessons = { keys: {}, photos: 0 }; saveLessons(); renderRight(); toast('Forgot what it learned.'); } }, 'Forget')) :
         (real && p.aiSnap ? el('button', { class: 'btn sm', type: 'button', onclick: () => { const ok = learnFrom(p); renderRight(); toast(ok ? 'Learned from your changes on this photo.' : 'No changes to learn from yet on this photo.'); } }, 'Learn from this photo now') : null)));
+    { const fi = el('input', { type: 'file', multiple: true, accept: 'image/*,.cr2,.cr3,.nef,.arw,.raf,.dng,.orf,.rw2', hidden: true, onchange: e => { const f = [...e.target.files]; e.target.value = ''; if (f.length) teachStyle(f); } }), sl = styleLines();
+      sd.append(el('div', { class: 'learned' }, el('b', { text: S.style && S.style.n ? `Learned from ${S.style.n} of your finished edits` : 'Teach it your style from your own edits' }),
+        sl.length ? el('ul', null, ...sl.map(x => el('li', { text: x }))) : el('p', { class: 'note', text: 'Pick camera originals together with your finished edits of them (same file names, e.g. IMG_1234.CR3 and IMG_1234.jpg). It measures how you move exposure, warmth, contrast, colour and each skin type, and the AI edits that way. 20 or more pairs from different light works best.' }),
+        el('div', { class: 'row', style: 'gap:8px' }, fi, el('button', { class: 'btn sm', type: 'button', onclick: () => fi.click() }, S.style && S.style.n ? 'Teach from more edits' : 'Teach from my edits'),
+          S.style && S.style.n ? el('button', { class: 'btn ghost sm', type: 'button', onclick: () => { S.style = null; saveStyle(); renderRight(); toast('Forgot your measured style.'); } }, 'Forget') : null))); }
     sd.append(el('label', { class: 'row', style: 'gap:8px;font-size:12px;margin-top:10px' }, el('input', { type: 'checkbox', checked: lsGet('lookmatch.keepEdits', '0') === '1' || null, onchange: e => { lsSet('lookmatch.keepEdits', e.target.checked ? '1' : '0'); toast(e.target.checked ? 'Photos you import again will keep their last edit.' : 'Photos you import again will start fresh.'); } }), el('span', { text: 'Keep a photo\'s last edit when I import it again' })));
     box.append(sd); box.append = bAppend;
     return box;
@@ -1553,6 +1645,9 @@ Reply with JSON only: {"subjects":"...","items":[{"label":"...","kind":"person",
       slider(p, 'heal', 'Blemish heal', 0, 100), slider(p, 'shine', 'Shine control', 0, 100),
       slider(p, 'eyes', 'Eyes', 0, 100), slider(p, 'teeth', 'Teeth', 0, 100),
       slider(p, 'fabric', 'Fabric wrinkles', 0, 100), slider(p, 'flyaways', 'Flyaway hair', 0, 100),
+      slider(p, 'faceRestore', 'Face restore', 0, 100),
+      el('div', { class: 'sub-h', text: 'Shape', style: 'font-size:11px;opacity:.7;margin:8px 0 2px' }),
+      slider(p, 'faceSlim', 'Slim face', 0, 100), slider(p, 'jaw', 'Jawline', 0, 100), slider(p, 'eyesBig', 'Bigger eyes', 0, 100), slider(p, 'bodySlim', 'Slim body', 0, 100),
       ok ? null : el('p', { class: 'note', text: 'Skin tools need the people found first (Find people under Light & color).' }));
   }
   function effectsPanel(p) {
@@ -1990,5 +2085,5 @@ Reply with JSON only: {"results":[{"i":1,"people":0,"closed":0,"intentional":0,"
 
   /* ---------------- boot ---------------- */
   render(); initCaps();
-  window.__studio = { S, AG, decode, importFiles, render, setMod, runExport, EX, change, applyLook, photo, setTool, CR, commitCrop, runEyes };
+  window.__studio = { S, AG, decode, importFiles, render, setMod, runExport, EX, change, applyLook, photo, setTool, CR, commitCrop, runEyes, agentEdit };
 })();

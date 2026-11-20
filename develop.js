@@ -12,7 +12,7 @@ const Dev = (() => {
     const hsl = {}; for (const k of HSL_KEYS) hsl[k] = [0, 0, 0];
     return { v: 1, look: null, lookAmt: 100, pick: 'auto', ev: 0, temp: 0, tint: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0,
       vibrance: 0, saturation: 0, hsl, skyExp: 0, skySat: 0, skyTemp: 0, clarity: 0, dehaze: 0, vignette: 0, grain: 0, sharpen: 0,
-      crop: null, angle: 0, rot: 0, flipH: false, aspect: 'orig', creative: null, creativeAmt: 70, subjLight: 0, dodgeBurn: 0, skinMatch: 0, bgEdit: 100, skinSmooth: 0, beautify: 0, heal: 0, shine: 0, eyes: 0, teeth: 0, fabric: 0, flyaways: 0, studioWarm: 0, studioX: 500, studioY: 300, rescue: 0, glow: 0, flare: 0, flareX: 850, flareY: 120, flareWarm: 60, aiStrokes: [], curve: null, bgBlur: 0, bokeh: 0, pop: 0, faceLight: 0, studioLight: 0, studioDir: 'top', studioTarget: 'person', noise: 0, people: null };
+      crop: null, angle: 0, rot: 0, flipH: false, aspect: 'orig', creative: null, creativeAmt: 70, subjLight: 0, dodgeBurn: 0, skinMatch: 0, bgEdit: 100, skinSmooth: 0, beautify: 0, heal: 0, shine: 0, faceSlim: 0, jaw: 0, eyesBig: 0, bodySlim: 0, faceRestore: 0, eyes: 0, teeth: 0, fabric: 0, flyaways: 0, studioWarm: 0, studioX: 500, studioY: 300, rescue: 0, glow: 0, flare: 0, flareX: 850, flareY: 120, flareWarm: 60, aiStrokes: [], curve: null, bgBlur: 0, bokeh: 0, pop: 0, faceLight: 0, studioLight: 0, studioDir: 'top', studioTarget: 'person', noise: 0, people: null };
   }
 
   /* ---------- tone curve (1D, on luminance) ---------- */

@@ -198,6 +198,59 @@ const Pipe = (() => {
     for (let Y = 0; Y < ch; Y++) { const y = Math.min(h - 1, (Y * s) | 0); for (let X = 0; X < cw; X++) { const i = y * w + Math.min(w - 1, (X * s) | 0), b = bd[i]; if (b < 0.02 || bW[i] < 0.15) continue;
       const p = 4 * (Y * cw + X), t = Math.min(1, b * 1.5) * amt * 0.9; for (let c = 0; c < 3; c++) data[p + c] += (BG[c][i] / bW[i] - data[p + c]) * t; } }
   }
+  /* where each person's face, eyes, chin and body sit in the edited frame (after crop, rotation and flips), in map pixels */
+  function personGeoms(people, s, SW, SH, w, h) {
+    const out = [], k = 512 / Math.max(SW, SH), bw = Math.max(2, Math.round(SW * k)), bh = Math.max(2, Math.round(SH * k));
+    const src = document.createElement('canvas'); src.width = bw; src.height = bh; const sx = src.getContext('2d');
+    const o = document.createElement('canvas'); o.width = w; o.height = h; const ox = o.getContext('2d', { willReadFrequently: true });
+    const dot = (q, r, col) => { sx.fillStyle = col; sx.beginPath(); sx.arc(q[0] * bw, q[1] * bh, r, 0, 7); sx.fill(); };
+    const read = () => { ox.globalCompositeOperation = 'source-over'; ox.fillStyle = '#000'; ox.fillRect(0, 0, w, h); if (s) D.drawGeom(ox, src, bw, bh, s, w, h); else ox.drawImage(src, 0, 0, w, h); return ox.getImageData(0, 0, w, h).data; };
+    const box = (d, ch) => { let x0 = w, y0 = h, x1 = -1, y1 = -1, sxx = 0, syy = 0, n = 0; for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (d[4 * (y * w + x) + ch] > 110) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; sxx += x; syy += y; n++; } return n ? { x0, y0, x1, y1, cx: sxx / n, cy: syy / n } : null; };
+    for (const p of people) { if (!p.f || !p.b) continue;
+      sx.globalCompositeOperation = 'source-over'; sx.fillStyle = '#000'; sx.fillRect(0, 0, bw, bh); sx.globalCompositeOperation = 'lighter';
+      const [a, b, c, d] = p.f, [ba, bb, bc, bd] = p.b; sx.fillStyle = '#f00'; sx.fillRect(a * bw, b * bh, (c - a) * bw, (d - b) * bh); sx.fillStyle = '#0f0'; sx.fillRect(ba * bw, bb * bh, (bc - ba) * bw, (bd - bb) * bh);
+      const er = Math.max(1.5, 0.03 * (c - a) * bw); if (p.lm && p.lm.le) dot(p.lm.le, er, '#00f'); const d1 = read();
+      const F = box(d1, 0), B = box(d1, 1), LE = box(d1, 2); let RE = null;
+      if (p.lm && p.lm.re) { sx.globalCompositeOperation = 'source-over'; sx.fillStyle = '#000'; sx.fillRect(0, 0, bw, bh); dot(p.lm.re, er, '#00f'); RE = box(read(), 2); }
+      if (F && B) out.push({ face: F, body: B, le: LE ? [LE.cx, LE.cy] : null, re: RE ? [RE.cx, RE.cy] : null }); }
+    return out;
+  }
+  /* face and body reshaping, liquify-style, built as one smooth displacement field so nothing tears:
+     faceSlim narrows the lower face and cheeks, jaw tightens the line under the chin, eyesBig opens the eyes a little, bodySlim narrows the waist and arms.
+     Every move is small and falls off softly, so backgrounds bend as little as possible. */
+  function reshape(data, cw, ch, G, w, h, s) {
+    const DX = new Float32Array(w * h), DY = new Float32Array(w * h), fs = (s.faceSlim || 0) / 100, eb = (s.eyesBig || 0) / 100, jw = (s.jaw || 0) / 100, bs = (s.bodySlim || 0) / 100;
+    for (const g of G) { const F = g.face, fw = F.x1 - F.x0 + 1, fh = F.y1 - F.y0 + 1, fcx = (F.x0 + F.x1) / 2, B = g.body, bw = B.x1 - B.x0 + 1, bh = B.y1 - B.y0 + 1;
+      const bcx = fcx, y0 = Math.max(0, Math.floor(F.y0 - fh)), y1 = Math.min(h - 1, Math.ceil(Math.max(F.y1 + fh, bs > 0 ? B.y1 : 0))), x0 = Math.max(0, Math.floor(Math.min(F.x0 - fw, bs > 0 ? B.x0 - 0.3 * bw : w))), x1 = Math.min(w - 1, Math.ceil(Math.max(F.x1 + fw, bs > 0 ? B.x1 + 0.3 * bw : 0)));
+      const eyes = [g.le, g.re].filter(Boolean), ed = eyes.length === 2 ? Math.hypot(eyes[1][0] - eyes[0][0], eyes[1][1] - eyes[0][1]) : 0.4 * fw;
+      for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) { const i = y * w + x; let dx = 0, dy = 0;
+        if (fs > 0) { const r = (x - fcx) / (0.55 * fw), vy = (y - (F.y0 + 0.72 * fh)) / (0.38 * fh); dx += fs * 0.075 * fw * 1.65 * r * Math.exp(-r * r) * Math.exp(-vy * vy); }
+        if (jw > 0) { const r = (x - fcx) / (0.5 * fw), vy = (y - (F.y1 + 0.12 * fh)) / (0.16 * fh); dy += jw * 0.06 * fh * Math.exp(-r * r - vy * vy); }
+        if (eb > 0) for (const E of eyes) { const ex = x - E[0], ey = y - E[1], R = 0.32 * ed, q = (ex * ex + ey * ey) / (R * R); if (q < 4) { const m = eb * 0.22 * Math.exp(-q); dx -= ex * m; dy -= ey * m; } }
+        if (bs > 0 && y > F.y1 + 0.3 * fh) { const r = (x - bcx) / (0.42 * bw), t = Math.min(1, (y - F.y1 - 0.3 * fh) / (0.4 * fh)); dx += bs * 0.06 * bw * 1.65 * r * Math.exp(-r * r) * t; }
+        DX[i] += dx; DY[i] += dy; } }
+    const sx = cw / w, sy = ch / h, src = new Uint8ClampedArray(data);
+    for (let Y = 0; Y < ch; Y++) { const fy = Math.min(h - 1.001, Math.max(0, (Y + 0.5) / sy - 0.5)), y0 = fy | 0, uy = fy - y0;
+      for (let X = 0; X < cw; X++) { const fx = Math.min(w - 1.001, Math.max(0, (X + 0.5) / sx - 0.5)), x0 = fx | 0, ux = fx - x0, i = y0 * w + x0;
+        const dx = ((DX[i] * (1 - ux) + DX[i + 1] * ux) * (1 - uy) + (DX[i + w] * (1 - ux) + DX[i + w + 1] * ux) * uy) * sx, dy = ((DY[i] * (1 - ux) + DY[i + 1] * ux) * (1 - uy) + (DY[i + w] * (1 - ux) + DY[i + w + 1] * ux) * uy) * sy;
+        if (Math.abs(dx) < 0.05 && Math.abs(dy) < 0.05) continue;
+        const qx = Math.min(cw - 1.001, Math.max(0, X + dx)), qy = Math.min(ch - 1.001, Math.max(0, Y + dy)), ax = qx | 0, ay = qy | 0, vx = qx - ax, vy = qy - ay, p = 4 * (Y * cw + X), q = 4 * (ay * cw + ax), r = q + 4 * cw;
+        for (let c = 0; c < 3; c++) data[p + c] = (src[q + c] * (1 - vx) + src[q + 4 + c] * vx) * (1 - vy) + (src[r + c] * (1 - vx) + src[r + 4 + c] * vx) * vy; } }
+  }
+  /* face restore for soft or slightly missed-focus faces: the blur is undone (Richardson-Lucy deconvolution) on the face's features -
+     eyes, brows, lashes, lips, hairline - while smooth skin is left out, so it reads sharp without crunchy skin */
+  function faceRestore(data, cw, ch, M, mw, mh, amt, gscale) {
+    let x0 = mw, y0 = mh, x1 = -1, y1 = -1;
+    for (let y = 0; y < mh; y++) for (let x = 0; x < mw; x++) if (M[y * mw + x] > 0.05) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    if (x1 < 0) return;
+    const X0 = Math.max(0, Math.floor((x0 - 2) * cw / mw)), Y0 = Math.max(0, Math.floor((y0 - 2) * ch / mh)), X1 = Math.min(cw, Math.ceil((x1 + 3) * cw / mw)), Y1 = Math.min(ch, Math.ceil((y1 + 3) * ch / mh)), w = X1 - X0, h = Y1 - Y0, n = w * h; if (w < 16 || h < 16 || n > 9e6) return;
+    const L = new Float32Array(n); for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const p = 4 * ((Y0 + y) * cw + X0 + x); L[y * w + x] = (0.299 * data[p] + 0.587 * data[p + 1] + 0.114 * data[p + 2]) / 255 + 0.01; }
+    const sig = Math.max(0.6, (0.9 + 1.4 * amt) * Math.min(1, gscale || 1)), est = new Float32Array(L), ratio = new Float32Array(n);
+    for (let it = 0; it < 7; it++) { const b = LC.blur(est, w, h, sig); for (let i = 0; i < n; i++) ratio[i] = L[i] / Math.max(0.005, b[i]); const rb = LC.blur(ratio, w, h, sig); for (let i = 0; i < n; i++) est[i] = Math.max(0, Math.min(1.2, est[i] * Math.max(0.6, Math.min(1.6, rb[i])))); }
+    for (let y = 0; y < h; y++) { const my = Math.min(mh - 1, ((Y0 + y) * mh / ch) | 0); for (let x = 0; x < w; x++) { const m = M[my * mw + Math.min(mw - 1, ((X0 + x) * mw / cw) | 0)]; if (m < 0.03) continue;
+      const i = y * w + x, g = Math.max(0.7, Math.min(1.45, est[i] / L[i])), k = 1 + (g - 1) * Math.min(1, m * 1.2) * Math.min(1, amt * 1.3), p = 4 * ((Y0 + y) * cw + X0 + x);
+      data[p] = ((data[p] / 255 + 0.01) * k - 0.01) * 255; data[p + 1] = ((data[p + 1] / 255 + 0.01) * k - 0.01) * 255; data[p + 2] = ((data[p + 2] / 255 + 0.01) * k - 0.01) * 255; } }
+  }
   /* soft glow: the bright parts of the scene bloom gently, the dreamy wedding look (an Orton-style glow), kept off deep shadows so nothing goes milky */
   function glowFx(data, cw, ch, amt) {
     const s = Math.min(1, 900 / Math.max(cw, ch)), w = Math.max(8, Math.round(cw * s)), h = Math.max(8, Math.round(ch * s)), n = w * h, R = new Float32Array(n), G = new Float32Array(n), B = new Float32Array(n);
@@ -469,7 +522,7 @@ const Pipe = (() => {
     const sky = (s.skyExp || s.skySat || s.skyTemp) ? memo('sky|' + mkey, () => D.skyMask(small)) : null;
     const brush = o.brush ? resample(o.brush.data, o.brush.w, o.brush.h, small.w, small.h) : null;
     let cr = null, sm = null;
-    const needSubj = (s.creative && s.creativeAmt > 0) || !!(s.aiStrokes && s.aiStrokes.length) || !!(s.curve && s.curve.target !== 'whole') || (look && s.lookBg) || s.subjLight > 0 || s.dodgeBurn > 0 || s.skinMatch > 0 || (s.bgEdit ?? 100) < 100 || s.pop > 0 || s.faceLight > 0 || s.studioLight > 0 || s.skinSmooth > 0 || s.beautify > 0 || s.heal > 0 || s.shine > 0 || s.fabric > 0 || s.flyaways > 0 || s.eyes > 0 || s.teeth > 0 || s.bgBlur > 0 || s.bokeh > 0 || !!look;
+    const needSubj = (s.creative && s.creativeAmt > 0) || !!(s.aiStrokes && s.aiStrokes.length) || !!(s.curve && s.curve.target !== 'whole') || (look && s.lookBg) || s.subjLight > 0 || s.dodgeBurn > 0 || s.skinMatch > 0 || (s.bgEdit ?? 100) < 100 || s.pop > 0 || s.faceLight > 0 || s.studioLight > 0 || s.skinSmooth > 0 || s.beautify > 0 || s.heal > 0 || s.shine > 0 || s.fabric > 0 || s.flyaways > 0 || s.eyes > 0 || s.teeth > 0 || s.faceRestore > 0 || s.bgBlur > 0 || s.bokeh > 0 || !!look;
     if (needSubj) { const paint = o.subj ? resample(o.subj.data instanceof Float32Array ? o.subj.data : Float32Array.from(o.subj.data), o.subj.w, o.subj.h, small.w, small.h) : null; if (s.people && s.people.length) {
         // people located by Claude: exact skin (learned from their own face) and person masks
         const pm = memo('pmk|' + mkey + (o.subj ? ':' + (o.subj.v || 0) : ''), () => D.peopleMasks(small, boxMaps(s.people, s, o.SW, o.SH, small.w, small.h), paint));
@@ -655,6 +708,8 @@ const Pipe = (() => {
     if ((bt > 0 || eyA > 0 || thA > 0) && known) { const F = s.people && s.people.length ? memo('feat|' + mkey + '|' + cw, () => faceFeatures(s.people, s, o.SW, o.SH, Math.min(cw, 1400), Math.round(Math.min(cw, 1400) * ch / cw))) : null;
       beautify(img.data, cw, ch, F, LC.blur(sm.pk.people, small.w, small.h, 0.004 * Math.max(small.w, small.h)), small.w, small.h, bt, eyA, thA);
       if (bt > 0) define(img.data, cw, ch, sm.mask, sm.pk.hair || null, small.w, small.h, bt, 4 * noiseSigma(img.data, cw, ch), sm.pk.tight || null); }
+    if (s.faceRestore > 0 && known && sm.face) { const T = sm.pk.tight || sm.pk.people, FM = sm.face, RM = new Float32Array(FM.length); for (let i = 0; i < RM.length; i++) RM[i] = Math.min(1, FM[i] * 1.5) * (1 - 0.85 * Math.min(1, T[i] * 1.4));
+      faceRestore(img.data, cw, ch, LC.blur(RM, small.w, small.h, 0.003 * Math.max(small.w, small.h)), small.w, small.h, s.faceRestore / 100, Math.min(1, Math.max(cw, ch) / Math.max(o.SW || cw, o.SH || ch) * 1.6)); }
     if (s.bgBlur > 0 && known) bgBlur(img.data, cw, ch, sm.mask, small.w, small.h, s.bgBlur / 100);
     if (s.bokeh > 0 && known) bokehLights(img.data, cw, ch, sm.mask, small.w, small.h, s.bokeh / 100, hashStr((o.id || 'x').replace(/[spF]$/, '')));
     // noise reduction and sharpening happen before the background is put back, so 'subject only' leaves the background exactly as shot
@@ -669,6 +724,8 @@ const Pipe = (() => {
     }
     // (after the background is put back, so a curve meant for the background or the whole photo really reaches it)
     // Curve layer with a mask (like Photoshop): applied to each colour channel, on the people, the background, or everything
+    if ((s.faceSlim > 0 || s.eyesBig > 0 || s.jaw > 0 || s.bodySlim > 0) && s.people && s.people.length) { const G = memo('geo|' + mkey, () => personGeoms(s.people, s, o.SW, o.SH, small.w, small.h));
+      if (G.length) reshape(img.data, cw, ch, G, small.w, small.h, s); }
     if (s.glow > 0) glowFx(img.data, cw, ch, s.glow / 100);
     if (s.flare > 0) flareFx(img.data, cw, ch, s.flare / 100, (s.flareX ?? 850) / 1000, (s.flareY ?? 120) / 1000, s.flareWarm ?? 60);
     if (s.curve && Array.isArray(s.curve.pts)) { const f = D.curveFn(s.curve.pts), T = new Uint8ClampedArray(256); for (let k = 0; k < 256; k++) T[k] = Math.round(f[k] * 255);

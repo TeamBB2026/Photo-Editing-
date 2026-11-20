@@ -523,6 +523,78 @@ body.ai-mode .left { display: none; }
   .steps { grid-template-columns: minmax(0,1fr); }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+/* ================= holographic HUD (the AI editor at work) ================= */
+:root { --holo: #5ff6ff; --holo-2: #8f7cff; --holo-hot: #ffb45c; --holo-dim: rgba(95,246,255,.22); }
+.ag-hud { background: linear-gradient(180deg, rgba(6,20,30,.92), rgba(10,14,28,.92)); border: 1px solid rgba(95,246,255,.55); border-radius: 4px 18px 4px 18px;
+  box-shadow: 0 0 0 1px rgba(95,246,255,.12) inset, 0 0 24px rgba(95,246,255,.25), 0 12px 32px rgba(0,0,0,.55); font-family: var(--font-mono); overflow: hidden; }
+.ag-hud::before { content: ""; position: absolute; inset: 0; pointer-events: none; background: repeating-linear-gradient(0deg, rgba(95,246,255,.06) 0 1px, transparent 1px 3px); mix-blend-mode: screen; }
+.ag-hud::after { content: ""; position: absolute; left: -40%; top: 0; width: 40%; height: 100%; pointer-events: none; background: linear-gradient(90deg, transparent, rgba(95,246,255,.12), transparent); animation: hud-shine 3.2s linear infinite; }
+@keyframes hud-shine { to { left: 120%; } }
+.ag-hud .hud-top b { color: var(--holo); letter-spacing: .06em; text-shadow: 0 0 8px rgba(95,246,255,.7); text-transform: uppercase; font-size: 12px; }
+.ag-hud .hud-dot { background: var(--holo); }
+body.ai-paused .ag-hud .hud-dot { background: var(--holo-hot); animation: none; }
+.ag-hud .hud-b { border-color: rgba(95,246,255,.45); color: var(--holo); font-family: var(--font-mono); text-transform: uppercase; letter-spacing: .05em; font-size: 10.5px; border-radius: 3px; position: relative; z-index: 1; }
+.ag-hud .hud-b:hover { background: rgba(95,246,255,.12); }
+.ag-hud .hud-b[aria-pressed="true"] { background: var(--holo); border-color: var(--holo); color: #041318; box-shadow: 0 0 12px rgba(95,246,255,.6); }
+.ag-hud .hud-pause[aria-pressed="true"] { background: var(--holo-hot); border-color: var(--holo-hot); box-shadow: 0 0 12px rgba(255,180,92,.6); }
+.ag-hud .hud-stop { color: #ff8fa3; border-color: rgba(255,120,150,.5); }
+.ag-hud .hud-ok { background: var(--holo); color: #041318; border-color: var(--holo); font-weight: 700; box-shadow: 0 0 14px rgba(95,246,255,.6); }
+.ag-hud .hud-steps { grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); }
+.ag-hud .hud-steps li { border-radius: 2px; background: rgba(95,246,255,.06); border: 1px solid rgba(95,246,255,.14); color: rgba(200,250,255,.55); font-size: 10px; text-transform: uppercase; letter-spacing: .05em; }
+.ag-hud .hud-steps li.done { background: rgba(95,246,255,.16); color: #cffcff; border-color: rgba(95,246,255,.4); }
+.ag-hud .hud-steps li.done::before { color: var(--holo); }
+.ag-hud .hud-steps li.now { background: linear-gradient(90deg, rgba(95,246,255,.9), rgba(143,124,255,.9)); color: #041318; border-color: transparent; box-shadow: 0 0 14px rgba(95,246,255,.55); }
+.ag-hud .hud-now { color: var(--holo-hot); text-shadow: 0 0 6px rgba(255,180,92,.5); }
+.ag-hud .hud-now::before { content: "▸ "; color: var(--holo); }
+.hud-approve { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 9px; padding-top: 9px; border-top: 1px dashed rgba(95,246,255,.35); position: relative; z-index: 1; }
+.hud-approve[hidden] { display: none; }
+.hud-approve span { color: #cffcff; font-size: 12px; margin-right: auto; }
+
+/* the layer over the photo */
+.holo-layer { position: absolute; inset: 0; pointer-events: none; z-index: 6; }
+.holo-layer .hl-corner { position: absolute; width: 34px; height: 34px; border: 2px solid var(--holo); filter: drop-shadow(0 0 6px rgba(95,246,255,.9)); }
+.holo-layer .hl-corner.tl { left: 8px; top: 8px; border-right: 0; border-bottom: 0; }
+.holo-layer .hl-corner.tr { right: 8px; top: 8px; border-left: 0; border-bottom: 0; }
+.holo-layer .hl-corner.bl { left: 8px; bottom: 8px; border-right: 0; border-top: 0; }
+.holo-layer .hl-corner.br { right: 8px; bottom: 8px; border-left: 0; border-top: 0; }
+.holo-layer .hl-grid { position: absolute; inset: 0; opacity: .18; background-image: linear-gradient(rgba(95,246,255,.5) 1px, transparent 1px), linear-gradient(90deg, rgba(95,246,255,.5) 1px, transparent 1px); background-size: 44px 44px;
+  -webkit-mask-image: radial-gradient(ellipse at center, transparent 35%, #000 100%); mask-image: radial-gradient(ellipse at center, transparent 35%, #000 100%); }
+.holo-layer .hl-sweep { position: absolute; left: 0; right: 0; top: 0; height: 18%; opacity: 0; background: linear-gradient(180deg, transparent, rgba(95,246,255,.22) 80%, rgba(180,255,255,.75) 98%, transparent); }
+.holo-layer.scan .hl-sweep { animation: holo-sweep 1.8s cubic-bezier(.5,0,.5,1) 1; }
+@keyframes holo-sweep { 0% { top: -18%; opacity: 0; } 10% { opacity: 1; } 90% { opacity: 1; } 100% { top: 100%; opacity: 0; } }
+.holo-layer .hl-face { position: absolute; border: 1px solid rgba(95,246,255,.75); border-radius: 50%; box-shadow: 0 0 14px rgba(95,246,255,.45), inset 0 0 14px rgba(95,246,255,.25); animation: holo-lock 1.2s ease-out both; }
+.holo-layer .hl-face::before, .holo-layer .hl-face::after { content: ""; position: absolute; inset: -9px; border: 1px dashed rgba(95,246,255,.55); border-radius: 50%; animation: holo-spin 9s linear infinite; }
+.holo-layer .hl-face::after { inset: -18px; border-style: solid; border-color: rgba(143,124,255,.5) transparent rgba(143,124,255,.5) transparent; animation-duration: 5s; animation-direction: reverse; }
+.holo-layer .hl-face span { position: absolute; left: 100%; top: -4px; margin-left: 22px; white-space: nowrap; font: 600 10px/1 var(--font-mono); letter-spacing: .1em; color: var(--holo); text-shadow: 0 0 6px rgba(95,246,255,.9); padding: 3px 6px; background: rgba(4,19,24,.55); border-left: 2px solid var(--holo); }
+@keyframes holo-lock { from { transform: scale(1.6); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+@keyframes holo-spin { to { transform: rotate(360deg); } }
+.holo-layer .hl-panel { position: absolute; left: 14px; top: 50px; max-width: min(46%, 300px); padding: 8px 10px; background: linear-gradient(90deg, rgba(4,19,24,.72), rgba(4,19,24,.2)); border-left: 2px solid var(--holo); font-family: var(--font-mono); }
+.holo-layer .hl-title { font-size: 11px; font-weight: 700; letter-spacing: .14em; color: var(--holo); text-shadow: 0 0 8px rgba(95,246,255,.9); }
+.holo-layer .hl-log { list-style: none; margin: 6px 0 0; padding: 0; font-size: 10.5px; line-height: 1.5; color: #cffcff; }
+.holo-layer .hl-log li { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: .55; }
+.holo-layer .hl-log li:first-child { opacity: 1; color: var(--holo-hot); animation: holo-type .5s steps(18) both; }
+@keyframes holo-type { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
+.holo-layer .hl-note { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); font: 700 22px/1 var(--font-mono); letter-spacing: .3em; color: var(--holo-hot); text-shadow: 0 0 16px rgba(255,180,92,.9); opacity: 0; transition: opacity .3s; padding: 12px 18px; border: 1px solid rgba(255,180,92,.6); background: rgba(10,6,0,.45); }
+.holo-layer .hl-note.on { opacity: 1; }
+.holo-layer .hl-ticks { position: absolute; right: 12px; top: 50%; width: 10px; height: 46%; transform: translateY(-50%); background: repeating-linear-gradient(180deg, rgba(95,246,255,.7) 0 1px, transparent 1px 8px); opacity: .5; }
+body.ai-busy #frame { box-shadow: 0 0 0 1px rgba(95,246,255,.45), 0 0 28px rgba(95,246,255,.22); }
+
+/* the holographic hand */
+.ag-hand { width: 44px; height: 44px; left: -10px; top: -6px; border-radius: 0; background: none; box-shadow: none; }
+.ag-hand .hand-svg { width: 44px; height: 44px; fill: rgba(95,246,255,.18); stroke: var(--holo); stroke-width: 2.2; stroke-linejoin: round; filter: drop-shadow(0 0 6px rgba(95,246,255,.95)) drop-shadow(0 0 14px rgba(143,124,255,.7)); transform: rotate(-18deg); transform-origin: 30% 20%; transition: transform .15s; }
+.ag-hand .hand-ring { position: absolute; left: 6px; top: 2px; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; border: 2px solid var(--holo); opacity: 0; }
+.ag-hand.press, .ag-hand.on.press { box-shadow: none; }
+.ag-hand.press .hand-svg { transform: rotate(-18deg) scale(.9); }
+.ag-hand.press .hand-ring { animation: hand-ripple .6s ease-out; }
+@keyframes hand-ripple { from { opacity: 1; transform: scale(.6); } to { opacity: 0; transform: scale(3.4); } }
+.ag-hand .hand-brush { position: absolute; left: 6px; top: 2px; width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 50%; border: 1.5px dashed var(--holo-hot); box-shadow: 0 0 10px rgba(255,180,92,.8), inset 0 0 8px rgba(255,180,92,.5); opacity: 0; transition: all .35s; }
+.ag-hand.brush .hand-brush { opacity: 1; width: 34px; height: 34px; margin: -17px 0 0 -17px; animation: holo-spin 4s linear infinite; }
+.ag-hand.brush.press .hand-brush { width: 48px; height: 48px; margin: -24px 0 0 -24px; background: radial-gradient(circle, rgba(255,180,92,.35), transparent 70%); }
+.ag-hand.brush .hand-svg { opacity: .55; }
+.sl.ai-touch { box-shadow: 0 0 0 1px rgba(95,246,255,.6), 0 0 16px rgba(95,246,255,.35); border-radius: 6px; background: rgba(95,246,255,.06); }
+@media (prefers-reduced-motion: reduce) { .ag-hud::after, .holo-layer .hl-face::before, .holo-layer .hl-face::after, .holo-layer.scan .hl-sweep, .ag-hand.brush .hand-brush, .holo-layer .hl-log li:first-child { animation: none; } }
+@media (max-width: 520px) { .holo-layer .hl-panel { display: none; } .holo-layer .hl-face span { display: none; } }
 </style>
 
 <div class="app">

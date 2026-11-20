@@ -9,6 +9,9 @@ A browser-based photo editor for wedding portraits, built for Brian's photograph
 - **Retouch**: blemish heal, shine control, eyes, teeth, fabric wrinkles, flyaway hair, skin smoothing that keeps texture, Beautify.
 - **Studio light**: direction or a placed spot, warm or cool colour.
 - **Light effects**: soft glow and a placeable sun flare.
+- **Like a hired editor**: watch it work through a holographic HUD, approve each photo before it moves on, pause, stop and continue where it left off.
+- **Shape & restore**: slim face, jawline, bigger eyes, slim body; face restore for soft or slightly blurry faces.
+- **Learns your style**: from your corrections and from pairs of your camera originals and finished edits.
 - **Subject only**: edits the people and leaves the background as shot.
 - **Curve**: tone curve with Apply to subject / background / whole photo.
 - **Looks**: save a look from your edits and apply it to other photos; ideas shown beside the photo.
