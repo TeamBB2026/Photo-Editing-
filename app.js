@@ -808,11 +808,64 @@
   function askApprove(p, i, n) { return new Promise(res => { const box = document.getElementById('hudApprove'); if (!box) return res('approve');
     corePhase('done'); holoStage('AWAITING APPROVAL'); hudStage(null, `Photo ${i + 1} of ${n}: ready for review`); setAgent('talk', `Photo ${i + 1} of ${n} is done. Take a look: approve it, or have me redo it.`);
     const done = v => { box.hidden = true; box.innerHTML = ''; corePhase('work'); res(v); };
+    holoShow(false);
     box.innerHTML = ''; box.append(el('span', { text: `Photo ${i + 1} of ${n} ready for review` }),
+      el('button', { type: 'button', class: 'hud-b', onclick: () => previewFull(p) }, 'Preview full size'),
+      el('button', { type: 'button', class: 'hud-b', onclick: async e => { const b = e.target; b.disabled = true; b.textContent = 'Preparing…'; try { const c = await fullRender(p, 4096), bl = await toBlob(c, 0.92); c.width = c.height = 0; await offerFile(p.name.replace(/\.[^.]+$/, '') + '.jpg', bl); } catch (err) { toast('Could not prepare the download: ' + (err.message || err)); } b.disabled = false; b.textContent = 'Download'; } }, 'Download'),
       el('button', { type: 'button', class: 'hud-b hud-ok', onclick: () => done('approve') }, i + 1 < n ? 'Approve & next' : 'Approve'),
       el('button', { type: 'button', class: 'hud-b', onclick: () => done('redo') }, 'Redo this photo'),
       el('button', { type: 'button', class: 'hud-b hud-stop', onclick: () => done('stop') }, 'Stop here'));
     box.hidden = false; const f = document.getElementById('stage') || document.getElementById('frame'); f && f.scrollIntoView({ block: 'start', behavior: 'smooth' }); box.querySelector('.hud-ok').focus({ preventScroll: true }); }); }
+  /* the finished photo at full quality, the way it will export */
+  async function fullRender(p, long) { const bmp = await decode(p.file), L = p.s.look ? lookById(p.s.look) : null;
+    const r = await P.process({ src: bmp, SW: bmp.width, SH: bmp.height, s: p.s, look: L ? L.look : null, lookKey: L ? L.id + ':' + (L.rev || 0) : '', id: p.id + 'F', maxLong: long, full: true, fullW: Math.max(bmp.width, bmp.height), brush: p.brush, subj: p.subj, rm: p.rm });
+    bmp.close && bmp.close(); return r.canvas; }
+  /* full-size preview before approving: fit or 100%, and hold to see the original */
+  async function previewFull(p) {
+    const ov = el('div', { class: 'pv-ov', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Full size preview' }), close = () => { ov.remove(); document.removeEventListener('keydown', onk); }, onk = e => { if (e.key === 'Escape') close(); };
+    const img = el('img', { class: 'pv-img', alt: 'Edited photo, full size' }), msg = el('p', { class: 'pv-msg', text: 'Rendering at full quality…' });
+    const zoom = el('button', { type: 'button', class: 'hud-b', onclick: () => { ov.classList.toggle('zoom'); zoom.textContent = ov.classList.contains('zoom') ? 'Fit to screen' : 'View 100%'; } }, 'View 100%');
+    const hold = el('button', { type: 'button', class: 'hud-b' }, 'Hold for original'); let edited = null, orig = null;
+    const show = o => { if (o && orig) img.src = orig; else if (edited) img.src = edited; };
+    hold.onpointerdown = () => show(true); hold.onpointerup = hold.onpointerleave = () => show(false);
+    ov.append(el('div', { class: 'pv-bar' }, el('b', { text: p.name }), zoom, hold, el('button', { type: 'button', class: 'hud-b hud-ok', onclick: close }, 'Close')), el('div', { class: 'pv-scroll' }, msg, img));
+    document.body.append(ov); document.addEventListener('keydown', onk);
+    try { const c = await fullRender(p, 4096); edited = URL.createObjectURL(await toBlob(c, 0.92)); c.width = c.height = 0; show(false); msg.remove();
+      const ob = await decode(p.file), oc = scaled(ob, ob.width, ob.height, 4096); orig = URL.createObjectURL(await toBlob(oc, 0.9)); oc.width = oc.height = 0; } catch (e) { msg.textContent = 'Could not render the preview.'; }
+  }
+  /* ---------- light up the part of the photo the editor is working on ---------- */
+  const FOCUS = { skinSmooth: 'skin', beautify: 'skin', heal: 'skin', shine: 'face', skinMatch: 'skin', faceRestore: 'face', faceLight: 'face', faceSlim: 'face', jaw: 'face', eyesBig: 'eyes', eyes: 'eyes', teeth: 'mouth',
+    subjLight: 'person', pop: 'person', dodgeBurn: 'person', studioLight: 'person', studioWarm: 'person', bodySlim: 'person', fabric: 'fabric', flyaways: 'hair', bgBlur: 'bg', bokeh: 'bg', bgEdit: 'bg',
+    skyExp: 'sky', skySat: 'sky', skyTemp: 'sky', shadows: 'dark', blacks: 'dark', rescue: 'dark', noise: 'dark', highlights: 'bright', whites: 'bright', glow: 'bright', vignette: 'edges' };
+  const FOCUS_NAME = { skin: 'SKIN', face: 'FACES', eyes: 'EYES', mouth: 'SMILE', person: 'SUBJECTS', fabric: 'CLOTHING', hair: 'HAIR EDGE', bg: 'BACKGROUND', sky: 'SKY', dark: 'SHADOWS', bright: 'HIGHLIGHTS', edges: 'FRAME EDGES', all: 'WHOLE IMAGE' };
+  async function holoMasks(p) {
+    const key = JSON.stringify(p.s.people || null); if (p._hm && p._hm.key === key) return p._hm;
+    const sb = await smallSource(p), c = scaled(sb, sb.width, sb.height, 320), w = c.width, h = c.height, d = c.getContext('2d').getImageData(0, 0, w, h).data, small = D.smallFrom(d, w, h, 320), n = small.w * small.h, M = { w: small.w, h: small.h };
+    const Y = new Float32Array(n); for (let i = 0; i < n; i++) Y[i] = 0.299 * small.rgb[3 * i] + 0.587 * small.rgb[3 * i + 1] + 0.114 * small.rgb[3 * i + 2];
+    M.dark = Y.map(v => Math.max(0, Math.min(1, (0.3 - v) / 0.18))); M.bright = Y.map(v => Math.max(0, Math.min(1, (v - 0.6) / 0.2)));
+    M.edges = new Float32Array(n); for (let y = 0; y < small.h; y++) for (let x = 0; x < small.w; x++) { const u = x / small.w - 0.5, v = y / small.h - 0.5; M.edges[y * small.w + x] = Math.max(0, Math.min(1, (Math.hypot(u, v) - 0.4) / 0.25)); }
+    try { const sk = D.skyMask(small); M.sky = sk && sk.mask ? sk.mask : null; } catch (e) { M.sky = null; }
+    if (p.s.people && p.s.people.length) { try { const pm = D.peopleMasks(small, P.boxMaps(p.s.people, null, sb.width, sb.height, small.w, small.h), null);
+        M.person = pm.person; M.skin = pm.skinTight; M.face = pm.face; M.hair = pm.hair; M.bg = pm.person.map(v => 1 - v);
+        M.fabric = pm.person.map((v, i) => Math.max(0, Math.min(1, v * 1.2) - Math.min(1, pm.skin[i] * 2) - (pm.hair ? Math.min(1, pm.hair[i] * 2) : 0)));
+        const dots = k => { const a = new Float32Array(n); for (const q of p.s.people) { const pts = k === 'eyes' ? [q.lm && q.lm.le, q.lm && q.lm.re] : [q.lm && q.lm.m]; const fw = q.f ? (q.f[2] - q.f[0]) * small.w : 20;
+            for (const t of pts) if (t) { const cx = t[0] * small.w, cy = t[1] * small.h, r = Math.max(3, (k === 'eyes' ? 0.13 : 0.22) * fw); for (let y = Math.max(0, cy - r | 0); y < Math.min(small.h, cy + r); y++) for (let x = Math.max(0, cx - r | 0); x < Math.min(small.w, cx + r); x++) { const dd = Math.hypot(x - cx, (y - cy) * (k === 'eyes' ? 1.6 : 1.4)) / r; if (dd < 1) a[y * small.w + x] = Math.max(a[y * small.w + x], 1 - dd * dd); } } } return a; };
+        M.eyes = dots('eyes'); M.mouth = dots('mouth'); } catch (e) { } }
+    M.key = key; p._hm = M; return M;
+  }
+  async function holoFocus(p, k) {
+    const h = document.getElementById('holoLayer'); if (!h) return; let cv = document.getElementById('hlMask'); if (!cv) { cv = el('canvas', { id: 'hlMask', class: 'hl-mask' }); h.prepend(cv); }
+    const lab = document.getElementById('hlTarget') || (() => { const e = el('div', { id: 'hlTarget', class: 'hl-target' }); h.append(e); return e; })();
+    if (!k) { cv.classList.remove('on'); lab.classList.remove('on'); return; }
+    if (p.s.crop || p.s.rot || p.s.angle || p.s.flipH) return;
+    let kind = FOCUS[k] || 'all'; if (k === 'studioLight' && p.s.studioTarget === 'background') kind = 'bg'; else if (k === 'studioLight' && p.s.studioTarget === 'both') kind = 'all';
+    lab.textContent = 'WORKING ON: ' + FOCUS_NAME[kind]; lab.classList.add('on');
+    if (kind === 'all') { cv.classList.remove('on'); holoStage(AG.hudTitle || ''); return; }
+    let M; try { M = await holoMasks(p); } catch (e) { return; } const m = M[kind]; if (!m) { cv.classList.remove('on'); return; }
+    cv.width = M.w; cv.height = M.h; const x = cv.getContext('2d'), id = x.createImageData(M.w, M.h);
+    for (let i = 0; i < m.length; i++) { const v = Math.max(0, Math.min(1, m[i])); id.data[4 * i] = 95; id.data[4 * i + 1] = 246; id.data[4 * i + 2] = 255; id.data[4 * i + 3] = Math.round(v * 120); }
+    x.putImageData(id, 0, 0); cv.classList.remove('on'); void cv.offsetWidth; cv.classList.add('on');
+  }
   /* ---------- the holographic layer over the photo while the AI works ---------- */
   function holoShow(on, p) {
     let h = document.getElementById('holoLayer'); const fr = document.getElementById('frame');
@@ -853,7 +906,7 @@
         const min = +inp.min, max = +inp.max, from = +inp.value, to = Math.max(min, Math.min(max, target)), dur = 700, t0 = performance.now();
         AG.dragging = true; try { for (let i = 1; i <= 4; i++) { inp.value = from + (to - from) * i / 4; inp.dispatchEvent(new Event('input', { bubbles: true })); await sleep(90); await renderIdle(3000); } } finally { AG.dragging = false; }
         inp.value = to; inp.dispatchEvent(new Event('input', { bubbles: true })); inp.dispatchEvent(new Event('change', { bubbles: true })); await renderIdle(6000); return; } }
-    const row = inp.closest('.sl'); row && row.classList.add('ai-touch');
+    const row = inp.closest('.sl'); row && row.classList.add('ai-touch'); if (AG.busy) holoFocus(p, key);
     const min = +inp.min, max = +inp.max, from = +inp.value, to = Math.max(min, Math.min(max, target));
     const pos = v => { const r = inp.getBoundingClientRect(); return [r.left + 7 + (v - min) / (max - min) * (r.width - 14), r.top + r.height / 2]; };
     let [x0, y0] = pos(from); await handTo(x0, y0, 420); ghost().classList.add('press'); await sleep(140);

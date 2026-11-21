@@ -595,6 +595,25 @@ body.ai-busy #frame { box-shadow: 0 0 0 1px rgba(95,246,255,.45), 0 0 28px rgba(
 .sl.ai-touch { box-shadow: 0 0 0 1px rgba(95,246,255,.6), 0 0 16px rgba(95,246,255,.35); border-radius: 6px; background: rgba(95,246,255,.06); }
 @media (prefers-reduced-motion: reduce) { .ag-hud::after, .holo-layer .hl-face::before, .holo-layer .hl-face::after, .holo-layer.scan .hl-sweep, .ag-hand.brush .hand-brush, .holo-layer .hl-log li:first-child { animation: none; } }
 @media (max-width: 520px) { .holo-layer .hl-panel { display: none; } .holo-layer .hl-face span { display: none; } }
+
+/* the part of the photo being worked on lights up */
+.holo-layer .hl-mask { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; mix-blend-mode: screen; filter: blur(1.5px) drop-shadow(0 0 6px rgba(95,246,255,.8)); transition: opacity .5s; }
+.holo-layer .hl-mask.on { animation: hl-pulse 2.2s ease-in-out infinite; }
+@keyframes hl-pulse { 0%, 100% { opacity: .35; } 50% { opacity: .85; } }
+.holo-layer .hl-target { position: absolute; right: 14px; bottom: 14px; font: 700 11px/1 var(--font-mono); letter-spacing: .14em; color: #041318; background: var(--holo); padding: 6px 9px; box-shadow: 0 0 16px rgba(95,246,255,.7); opacity: 0; transform: translateY(6px); transition: all .3s; }
+.holo-layer .hl-target.on { opacity: 1; transform: none; }
+/* full-size preview before approving */
+.pv-ov { position: fixed; inset: 0; z-index: 90; background: rgba(3,8,12,.94); display: flex; flex-direction: column; }
+.pv-bar { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid rgba(95,246,255,.35); font-family: var(--font-mono); color: var(--holo); }
+.pv-bar b { margin-right: auto; font-size: 12px; letter-spacing: .06em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pv-bar .hud-b { font: inherit; font-size: 11px; padding: 6px 10px; border-radius: 3px; border: 1px solid rgba(95,246,255,.45); background: transparent; color: var(--holo); text-transform: uppercase; cursor: pointer; touch-action: none; }
+.pv-bar .hud-ok { background: var(--holo); color: #041318; }
+.pv-scroll { flex: 1; overflow: auto; display: grid; place-items: center; }
+.pv-img { max-width: 100%; max-height: calc(100vh - 60px); object-fit: contain; }
+.pv-ov.zoom .pv-scroll { place-items: start; }
+.pv-ov.zoom .pv-img { max-width: none; max-height: none; }
+.pv-msg { color: var(--holo); font-family: var(--font-mono); font-size: 12px; letter-spacing: .1em; }
+@media (prefers-reduced-motion: reduce) { .holo-layer .hl-mask.on { animation: none; opacity: .6; } }
 </style>
 
 <div class="app">
