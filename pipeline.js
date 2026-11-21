@@ -395,7 +395,7 @@ const Pipe = (() => {
     for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const X = Math.min(cw - 1, ((x + 0.5) / k) | 0), Y = Math.min(ch - 1, ((y + 0.5) / k) | 0), p = 4 * (Y * cw + X); L[y * w + x] = (0.299 * data[p] + 0.587 * data[p + 1] + 0.114 * data[p + 2]) / 255; }
     const B = LC.blur(L, w, h, 0.02 * Math.max(w, h));   // the face's broad light and shadow
     const samp = (M, W, Hh, X, Y) => { const x = Math.min(W - 1.001, Math.max(0, X)), y = Math.min(Hh - 1.001, Math.max(0, Y)), x0 = x | 0, y0 = y | 0, u = x - x0, v = y - y0, i = y0 * W + x0; return (M[i] * (1 - u) + M[i + 1] * u) * (1 - v) + (M[i + W] * (1 - u) + M[i + W + 1] * u) * v; };
-    const src = new Uint8ClampedArray(data), shape = 0.4 * amt, crisp = 0, T = Math.max(2.5, thr);
+    const src = new Uint8ClampedArray(data), shape = 0.15 * amt, crisp = 0, T = Math.max(2.5, thr);
     for (let Y = 1; Y < ch - 1; Y++) for (let X = 1; X < cw - 1; X++) {
       const pm = samp(P, mw, mh, X * mw / cw, Y * mh / ch); if (pm < 0.03) continue;
       const p = 4 * (Y * cw + X), l = (0.299 * src[p] + 0.587 * src[p + 1] + 0.114 * src[p + 2]) / 255, b = samp(B, w, h, X * k, Y * k), hm = H ? samp(H, mw, mh, X * mw / cw, Y * mh / ch) : 0;
@@ -484,7 +484,7 @@ const Pipe = (() => {
     const YY = new Float32Array(n); for (let i = 0; i < n; i++) YY[i] = Y[i] * Y[i];
     const mY = LC.blur(Y, w, h, rl), mYY = LC.blur(YY, w, h, rl), A = new Float32Array(n), B = new Float32Array(n);
     for (let i = 0; i < n; i++) { const v = Math.max(0, mYY[i] - mY[i] * mY[i]), a = v / (v + eps); A[i] = a; B[i] = mY[i] * (1 - a); }
-    const mA = LC.blur(A, w, h, rl), mB = LC.blur(B, w, h, rl), ky = 0.85 * amt, kc = Math.min(1, 1.2 * amt);
+    const mA = LC.blur(A, w, h, rl), mB = LC.blur(B, w, h, rl), ky = Math.min(0.95, 1.1 * amt), kc = Math.min(1, 1.3 * amt);
     for (let i = 0; i < n; i++) { const y = Y[i] + (mA[i] * Y[i] + mB[i] - Y[i]) * ky, b = Cb[i] + (cb[i] - Cb[i]) * kc, r = Cr[i] + (cr[i] - Cr[i]) * kc;
       const R = (y + r) * 255, Bv = (y + b) * 255, G = (y * 255 - 0.299 * R - 0.114 * Bv) / 0.587; data[4 * i] = R; data[4 * i + 1] = G; data[4 * i + 2] = Bv; }
   }
